@@ -189,19 +189,33 @@ pip install yt-dlp --break-system-packages -q 2>/dev/null
 ```
 
 ### Step 2: Download transcripts
-Run the Python helper script:
+Locate and run the Python helper script. Search for it in the workspace:
 
 ```bash
-python3 /path/to/ytscribe/scripts/ytscribe.py \
+SCRIPT=$(find / -name "ytscribe.py" -path "*/scripts/*" 2>/dev/null | head -1)
+python3 "$SCRIPT" \
   --videos "VIDEO_ID_1,VIDEO_ID_2,..." \
   --format {txt|md} \
   --merge {true|false} \
-  --output-dir /home/claude/ytscribe_output \
+  --output-dir ./ytscribe_output \
   --timestamps {true|false} \
   --lang {language_code}
 ```
 
-### Step 3: Present output
+If the script cannot be found, check that `scripts/ytscribe.py` has been added as a knowledge file, then write it to a temp location before running.
+
+### Step 3: Clean up the transcript
+YouTube auto-generated captions have no punctuation, no paragraph breaks, and no capitalization. After extracting, reformat the transcript:
+
+- Add punctuation (periods, commas, question marks) based on natural speech patterns
+- Capitalize the first word of each sentence
+- Break into paragraphs at natural topic or speaker shifts
+- Remove filler artifacts like `[Music]`, `[Applause]`, `[Laughter]` unless the user asked for raw output
+
+For transcripts under ~5,000 words: always reformat.
+For transcripts over ~5,000 words: reformat only if the user requests it (e.g. "clean it up", "add punctuation"). Otherwise deliver the raw extracted text and note: "This is the raw transcript — let me know if you'd like me to clean up punctuation and paragraph breaks."
+
+### Step 4: Present output
 Always copy final output files to `/mnt/user-data/outputs/` and use `present_files`.
 
 ---
