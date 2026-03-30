@@ -313,8 +313,8 @@ def process_videos(
             f.write(merged_text)
         results["output_files"].append(filepath)
     
-    # Auto-zip if 10+ individual files
-    if not merge and len(results["output_files"]) >= 10:
+    # Auto-zip if 6+ individual files
+    if not merge and len(results["output_files"]) >= 6:
         zip_path = os.path.join(output_dir, f"ytscribe_batch_{len(results['output_files'])}_videos.zip")
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for fp in results["output_files"]:
