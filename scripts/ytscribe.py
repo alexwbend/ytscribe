@@ -211,11 +211,20 @@ Date: {metadata['date']}
 
 def sanitize_filename(title: str, max_length: int = 80) -> str:
     """Create a safe filename from a video title."""
-    # Remove or replace problematic characters
-    safe = re.sub(r'[<>:"/\\|?*]', '', title)
+    # Remove problematic characters including shell-unsafe and punctuation-heavy chars
+    safe = re.sub(r"[<>:\"/\\|?*'$&#@!%^(){}[\]+~`]", '', title)
+    # Replace whitespace with underscores
     safe = re.sub(r'\s+', '_', safe)
+    # Remove leading/trailing dots and underscores
     safe = safe.strip('._')
-    return safe[:max_length] if safe else "untitled"
+    # Truncate at last full word boundary to avoid mid-word cuts
+    if len(safe) > max_length:
+        truncated = safe[:max_length]
+        last_underscore = truncated.rfind('_')
+        if last_underscore > max_length // 2:
+            truncated = truncated[:last_underscore]
+        safe = truncated
+    return safe if safe else "untitled"
 
 
 def process_videos(
@@ -315,12 +324,14 @@ def process_videos(
     
     # Auto-zip if 6+ individual files
     if not merge and len(results["output_files"]) >= 6:
-        zip_path = os.path.join(output_dir, f"ytscribe_batch_{len(results['output_files'])}_videos.zip")
+        from datetime import datetime
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        zip_path = os.path.join(output_dir, f"ytscribe_{len(results['output_files'])}_transcripts_{date_str}.zip")
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for fp in results["output_files"]:
                 zf.write(fp, os.path.basename(fp))
         results["zip_file"] = zip_path
-        print(f"\n📦 Zipped {len(results['output_files'])} files → {zip_path}", flush=True)
+        print(f"\n📦 Zipped {len(results['output_files'])} transcripts → {os.path.basename(zip_path)}", flush=True)
     
     # Clean up work directory
     import shutil
