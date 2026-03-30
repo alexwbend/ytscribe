@@ -70,8 +70,9 @@ Parse what the user gave you automatically. Never ask "what type of input is thi
 Just extract and deliver. Smart defaults:
 - Clean prose (no timestamps)
 - Markdown format with metadata header
-- Short video (under ~15 min / ~3,000 words) → display inline in chat
-- Long video → save as .md file and present to user
+- Always save as a .md file and present to the user
+- Also display inline in chat only if the video is very short (under ~3 min / ~500 words)
+- For longer videos, show only the first 2-3 sentences as a preview, then link the file
 
 After delivering, add one line:
 > "This is clean prose. If you'd prefer timestamps, a different format, or just the raw text, let me know."
@@ -82,11 +83,11 @@ After delivering, add one line:
 
 Just extract all of them and deliver. Smart defaults:
 - Clean prose (no timestamps)
-- Single merged markdown file with metadata headers per video
-- Present the file to the user
+- Individual markdown files, one per video
+- Present the files to the user (auto-zipped if 6+ files)
 
 After delivering, add one line:
-> "These are merged into one markdown file. I can also split them into individual files, add timestamps, or switch to plain text."
+> "These are individual markdown files. I can also merge them into one file, add timestamps, or switch to plain text."
 
 ### Flow C: Large batch, playlist, or channel (10+ URLs, or playlist/channel URL)
 
@@ -127,8 +128,8 @@ After delivering, add one line:
 | Timestamps | OFF (clean prose) | "with timestamps", "timestamped", "I need to reference parts" |
 | File format | Markdown (.md) | "text file", "plain text", ".txt", "raw text" |
 | Structure | Merged (1 file) | "individual files", "separate files", "one per video" |
-| Language | English (en) | "in French", "Spanish subtitles", any language name or code |
-| Zip | Auto if 10+ individual files | User never needs to request this |
+| Language | Video's own language | "in English", "in French", "Spanish subtitles", any language name or code |
+| Zip | Auto if 6+ individual files | User never needs to request this |
 
 The override rule: if the user mentions ANY preference in their initial message, apply it silently.
 Do not confirm what they already told you. Do not say "I see you want timestamps, I'll add those."
@@ -238,10 +239,10 @@ Some videos have no subtitles (music videos, very old videos, live streams).
 
 ## Language support
 
-Default to English (`en`). If the user requests a specific language:
-- Use `--sub-lang {code}` (e.g., `fr`, `es`, `de`, `ar`)
-- If unavailable, fall back to auto-generated English
-- Mention in the output which language was actually used
+Default to the video's own language — do not force English. If the user requests a specific language:
+- Use `--sub-lang {code}` (e.g., `en`, `fr`, `es`, `de`, `ar`)
+- If the requested language is unavailable, fall back to the video's original language
+- Mention in the output which language was actually used if it differs from what was requested
 
 ---
 
@@ -249,7 +250,7 @@ Default to English (`en`). If the user requests a specific language:
 
 **Casual user — zero friction:**
 User: "Get me the transcript of this: https://youtube.com/watch?v=abc123"
-→ Extract immediately. Show inline if short, file if long. No questions. Offer alternatives after.
+→ Extract immediately. Save as file always. Show inline only if under ~3 min. No questions. Offer alternatives after.
 
 **Batch user — zero friction:**
 User: "I need transcripts for these:" [pastes 6 URLs]
