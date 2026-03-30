@@ -97,7 +97,7 @@ For playlists and channels, first enumerate the videos:
 ```bash
 yt-dlp --no-check-certificates --flat-playlist \
   --print "%(id)s ||| %(title)s ||| %(duration)s ||| %(upload_date)s" \
-  --playlist-end {N} \
+  --playlist-end {N} --max-downloads {N} \
   "{URL}"
 ```
 
