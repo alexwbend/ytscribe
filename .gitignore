@@ -1,0 +1,13 @@
+# ytscribe working files
+__pycache__/
+*.pyc
+.work/
+*.vtt
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Output directories (user-generated)
+ytscribe_output/
+*.zip
