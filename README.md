@@ -27,15 +27,9 @@ It understands four types of input automatically and handles each one with smart
 
 ## Install
 
-Add [`SKILL.md`](SKILL.md) as a knowledge file in your AI assistant's project or custom instructions.
+ytscribe runs in any agentic AI environment that can execute code on your machine. Add [`SKILL.md`](SKILL.md) as a knowledge file — that's the whole install. The skill handles the rest automatically, including its own dependency.
 
-**In agentic environments that can run code on your machine** — Cowork, Claude Code, Cursor, Windsurf, Cline, and similar tools — that's the whole install. The skill auto-installs its own dependency (`yt-dlp`) the first time it runs, saves transcript files directly to your machine, and handles everything end to end.
-
-**In chat-based environments** — ChatGPT, Gemini, DeepSeek, Qwen, and similar — ytscribe works as a guided workflow: the AI reads your request and generates the exact command to run. You'll need `yt-dlp` and `scripts/ytscribe.py` installed locally, then paste the command in your terminal when prompted.
-
-```bash
-pip install yt-dlp
-```
+Works with: Claude Cowork, Claude Code, Gemini CLI, Codex, Cursor, Windsurf, Cline, and similar tools.
 
 ---
 
