@@ -127,7 +127,7 @@ After delivering, add one line:
 |---------|---------|-------------------------------|
 | Timestamps | OFF (clean prose) | "with timestamps", "timestamped", "I need to reference parts" |
 | File format | Markdown (.md) | "text file", "plain text", ".txt", "raw text" |
-| Structure | Merged (1 file) | "individual files", "separate files", "one per video" |
+| Structure | Individual files | "merged", "one file", "combine all" |
 | Language | Video's own language | "in English", "in French", "Spanish subtitles", any language name or code |
 | Zip | Auto if 6+ individual files | User never needs to request this |
 
@@ -205,15 +205,19 @@ python3 "$SCRIPT" \
 If the script cannot be found, check that `scripts/ytscribe.py` has been added as a knowledge file, then write it to a temp location before running.
 
 ### Step 3: Clean up the transcript
-YouTube auto-generated captions have no punctuation, no paragraph breaks, and no capitalization. After extracting, reformat the transcript:
+First, assess the transcript quality:
 
+- **If it already has punctuation, capitalization, and paragraph breaks** (manually uploaded captions): preserve it exactly as-is. Do not reprocess or rephrase.
+- **If it is raw auto-generated text** (no punctuation, no capitalization, no paragraphs): clean it up.
+
+When cleaning up raw transcripts:
 - Add punctuation (periods, commas, question marks) based on natural speech patterns
 - Capitalize the first word of each sentence
 - Break into paragraphs at natural topic or speaker shifts
-- Remove filler artifacts like `[Music]`, `[Applause]`, `[Laughter]` unless the user asked for raw output
+- Remove filler artifacts like `[Music]`, `[Applause]`, `[Laughter]`, `(Laughter)`, `(Applause)`, `(Audience)` and similar bracketed or parenthesised sound cues, unless the user asked for raw output
 
-For transcripts under ~5,000 words: always reformat.
-For transcripts over ~5,000 words: reformat only if the user requests it (e.g. "clean it up", "add punctuation"). Otherwise deliver the raw extracted text and note: "This is the raw transcript — let me know if you'd like me to clean up punctuation and paragraph breaks."
+Apply cleanup automatically for transcripts under ~5,000 words.
+For transcripts over ~5,000 words: clean up only if the user requests it (e.g. "clean it up", "add punctuation"). Otherwise deliver the raw extracted text and note: "This is the raw transcript — let me know if you'd like me to clean up punctuation and paragraph breaks."
 
 ### Step 4: Present output
 Always copy final output files to `/mnt/user-data/outputs/` and use `present_files`.
@@ -268,7 +272,7 @@ User: "Get me the transcript of this: https://youtube.com/watch?v=abc123"
 
 **Batch user — zero friction:**
 User: "I need transcripts for these:" [pastes 6 URLs]
-→ Merged markdown. No questions. Deliver. Offer alternatives after.
+→ Individual markdown files, auto-zipped (6 files triggers zip). No questions. Deliver. Offer alternatives after.
 
 **Power user — honor stated preferences:**
 User: "Download timestamped .txt transcripts for the last 20 videos on @hubermanlab, individual files"

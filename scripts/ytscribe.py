@@ -33,26 +33,39 @@ def run_ytdlp(args: list[str], capture_output=True) -> subprocess.CompletedProce
 
 
 def get_video_metadata(video_id: str) -> dict:
-    """Fetch video metadata without downloading."""
-    result = run_ytdlp([
-        "--skip-download",
-        "--print", "%(title)s|||%(channel)s|||%(duration)s|||%(upload_date)s",
-        f"https://www.youtube.com/watch?v={video_id}"
-    ])
-    if result.returncode != 0:
-        return {"title": f"Video {video_id}", "channel": "Unknown", "duration": 0, "date": "Unknown"}
-    
-    parts = result.stdout.strip().split("|||")
-    if len(parts) >= 4:
-        duration = int(parts[2]) if parts[2].isdigit() else 0
-        date_raw = parts[3]
-        date_formatted = f"{date_raw[:4]}-{date_raw[4:6]}-{date_raw[6:8]}" if len(date_raw) == 8 else date_raw
-        return {
-            "title": parts[0],
-            "channel": parts[1],
-            "duration": duration,
-            "date": date_formatted
-        }
+    """Fetch video metadata without downloading. Retries up to 3 times on failure."""
+    for attempt in range(1, MAX_RETRIES + 1):
+        result = run_ytdlp([
+            "--skip-download",
+            "--print", "%(title)s|||%(channel)s|||%(duration)s|||%(upload_date)s",
+            f"https://www.youtube.com/watch?v={video_id}"
+        ])
+
+        if result.returncode == 0:
+            parts = result.stdout.strip().split("|||")
+            if len(parts) >= 4:
+                duration = int(parts[2]) if parts[2].isdigit() else 0
+                date_raw = parts[3]
+                date_formatted = f"{date_raw[:4]}-{date_raw[4:6]}-{date_raw[6:8]}" if len(date_raw) == 8 else date_raw
+                return {
+                    "title": parts[0],
+                    "channel": parts[1],
+                    "duration": duration,
+                    "date": date_formatted
+                }
+
+        # Check for rate limiting
+        stderr = result.stderr or ""
+        if "429" in stderr or "Too Many Requests" in stderr:
+            if attempt < MAX_RETRIES:
+                wait = RETRY_DELAY_SECONDS * attempt
+                print(f"  ⏳ Metadata rate limited. Waiting {wait}s before retry {attempt + 1}/{MAX_RETRIES}...", flush=True)
+                time.sleep(wait)
+                continue
+
+        # Non-429 failure — no point retrying
+        break
+
     return {"title": f"Video {video_id}", "channel": "Unknown", "duration": 0, "date": "Unknown"}
 
 
