@@ -10,7 +10,7 @@
 
 <p align="center">
   An open-source AI skill that extracts clean, readable transcripts from any YouTube video.<br/>
-  Single videos, batch lists, playlists, and entire channels — no code required.
+  Single videos, batch lists, playlists, and entire channels.
 </p>
 
 ---
@@ -49,7 +49,7 @@ ytscribe detects your input automatically.
 Paste one URL. Get a transcript. Short videos appear inline; long ones are saved as a file.
 
 ```
-Transcribe: https://youtube.com/watch?v=dQw4w9WgXcQ
+Transcribe: https://youtube.com/watch?v=qp0HIF3SfI4
 ```
 
 ### Small batch (2–9 URLs)
@@ -62,21 +62,28 @@ Transcribe: [URL1] [URL2] [URL3]
 ### Playlist
 Paste a playlist URL and ytscribe fetches the total count, shows you the first 10 titles as a preview, and asks how many you want before running. Specify a count in your prompt to skip the question entirely.
 
+"First" and "last" follow the playlist's own order as set by the creator, not upload date.
+
 ```
-Get transcripts from this playlist: https://youtube.com/playlist?list=PLxxxxxx
+Transcribe: https://youtube.com/playlist?list=PLxxxxxx
 ```
 ```
-Get the first 10 transcripts from this playlist: https://youtube.com/playlist?list=PLxxxxxx
+Transcribe the first 10 videos from: https://youtube.com/playlist?list=PLxxxxxx
+```
+```
+Transcribe the last 10 videos from: https://youtube.com/playlist?list=PLxxxxxx
 ```
 
 ### Channel
 Paste a channel URL and ytscribe shows you the most recent uploads and asks how many you want. Specify a count in your prompt to skip the question.
 
+"Last N" means most recent N uploads, newest first.
+
 ```
-Transcribe: https://youtube.com/@lexfridman
+Transcribe: https://youtube.com/@TED
 ```
 ```
-Transcribe the last 7 videos from https://youtube.com/@lexfridman
+Transcribe the last 7 videos from: https://youtube.com/@TED
 ```
 
 ---
