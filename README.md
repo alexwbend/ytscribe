@@ -29,15 +29,13 @@ It understands four types of input automatically and handles each one with smart
 
 Add [`SKILL.md`](SKILL.md) as a knowledge file in your AI assistant's project or custom instructions.
 
-**In Cowork or Claude Code**, that's the whole install. The skill auto-installs its own dependency (`yt-dlp`) the first time it runs — nothing else needed.
+**In agentic environments that can run code on your machine** — Cowork, Claude Code, Cursor, Windsurf, Cline, and similar tools — that's the whole install. The skill auto-installs its own dependency (`yt-dlp`) the first time it runs, saves transcript files directly to your machine, and handles everything end to end.
 
-**In a plain Claude.ai Project** (web interface without code execution), you'll also need to install `yt-dlp` locally and run the helper script yourself:
+**In chat-based environments** — ChatGPT, Gemini, DeepSeek, Qwen, and similar — ytscribe works as a guided workflow: the AI reads your request and generates the exact command to run. You'll need `yt-dlp` and `scripts/ytscribe.py` installed locally, then paste the command in your terminal when prompted.
 
 ```bash
 pip install yt-dlp
 ```
-
-Then add both [`SKILL.md`](SKILL.md) and [`scripts/ytscribe.py`](scripts/ytscribe.py) to your project. Claude will generate the exact command to run based on your request, and you paste it into your terminal.
 
 ---
 
@@ -172,7 +170,3 @@ Results are returned as JSON for easy parsing by the AI or downstream tools.
 MIT — free to use, modify, and distribute. See [LICENSE](LICENSE).
 
 ---
-
-<p align="center">
-  <sub>Built by a PM, not a developer — because AI skills should be for everyone.</sub>
-</p>
