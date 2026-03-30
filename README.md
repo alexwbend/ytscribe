@@ -27,13 +27,17 @@ It understands four types of input automatically and handles each one with smart
 
 ## Install
 
-ytscribe has one dependency: [`yt-dlp`](https://github.com/yt-dlp/yt-dlp), the open-source media tool that fetches subtitle tracks without downloading the video.
+Add [`SKILL.md`](SKILL.md) as a knowledge file in your AI assistant's project or custom instructions.
+
+**In Cowork or Claude Code**, that's the whole install. The skill auto-installs its own dependency (`yt-dlp`) the first time it runs — nothing else needed.
+
+**In a plain Claude.ai Project** (web interface without code execution), you'll also need to install `yt-dlp` locally and run the helper script yourself:
 
 ```bash
 pip install yt-dlp
 ```
 
-Then add [`SKILL.md`](SKILL.md) as a knowledge file in your AI assistant's project or custom instructions. That's it.
+Then add both [`SKILL.md`](SKILL.md) and [`scripts/ytscribe.py`](scripts/ytscribe.py) to your project. Claude will generate the exact command to run based on your request, and you paste it into your terminal.
 
 ---
 
