@@ -93,20 +93,22 @@ After delivering, add one line:
 
 **Questions to ask: ONE — about scope, not format.**
 
-For playlists and channels, first enumerate the videos:
+For playlists and channels, first fetch a preview (first 10 videos) and the total count:
 ```bash
 yt-dlp --no-check-certificates --flat-playlist \
   --print "%(id)s ||| %(title)s ||| %(duration)s ||| %(upload_date)s" \
-  --playlist-end {N} --max-downloads {N} \
+  --playlist-end 10 --max-downloads 10 \
   "{URL}"
 ```
 
-Show the user the list and ask a scope question:
-> "I found {N} videos on this channel. Here are the most recent {shown}:
+Never enumerate the full list — playlists can have thousands of videos. Always show a 10-video preview + total count, then ask one scope question:
+> "This playlist has {total} videos. Here are the first 10:
 > 1. {title} ({duration})
 > 2. {title} ({duration})
 > ...
-> Should I grab all {N}, or just these {shown}?"
+> How many would you like? (Max 50 per run)"
+
+If the user already specified a count in their prompt ("the last 7", "the first 20"), skip this question entirely and proceed directly.
 
 For a large batch of pasted URLs — no confirmation needed, just process them all.
 

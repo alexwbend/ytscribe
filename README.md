@@ -60,17 +60,23 @@ Transcribe: [URL1] [URL2] [URL3]
 ```
 
 ### Playlist
-Paste a playlist URL. ytscribe enumerates the videos, shows you the list, asks one scope question, then runs.
+Paste a playlist URL and ytscribe fetches the total count, shows you the first 10 titles as a preview, and asks how many you want before running. Specify a count in your prompt to skip the question entirely.
 
 ```
 Get transcripts from this playlist: https://youtube.com/playlist?list=PLxxxxxx
 ```
+```
+Get the first 10 transcripts from this playlist: https://youtube.com/playlist?list=PLxxxxxx
+```
 
 ### Channel
-Paste a channel URL. ytscribe fetches the most recent uploads and asks how many you want before proceeding.
+Paste a channel URL and ytscribe shows you the most recent uploads and asks how many you want. Specify a count in your prompt to skip the question.
 
 ```
 Transcribe: https://youtube.com/@lexfridman
+```
+```
+Transcribe the last 7 videos from https://youtube.com/@lexfridman
 ```
 
 ---
@@ -88,7 +94,7 @@ Transcribe: https://youtube.com/@lexfridman
 | Auto-zipped | ✓ if 6+ files | — |
 | Language | Video's own language | "in English", "in French", any language name |
 
-Language note: ytscribe uses the video's original language by default — a French video gives you a French transcript. If you request a different language and subtitles in that language aren't available, it falls back to the video's original language and tells you which one was used.
+Language note: ytscribe uses the video's original language by default: a French video gives you a French transcript. If you request a different language and subtitles in that language aren't available, it falls back to the video's original language and tells you which one was used.
 
 If you specify a preference in your first message, ytscribe silently honors it.
 
