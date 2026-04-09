@@ -88,12 +88,22 @@ Transcribe the last 7 videos from: https://youtube.com/@TED
 | Timestamped | | "with timestamps" |
 | Markdown `.md` | ✓ | — |
 | Plain text `.txt` | | "as a text file" |
+| JSON `.json` | | "as JSON" |
+| CSV `.csv` | | "as CSV" |
 | Individual files | ✓ | — |
 | Merged (1 file) | | "merged", "one file", "combine all" |
 | Auto-zipped | ✓ if 6+ files | — |
+| Chapters | ✓ auto-detected | "no chapters" to disable |
 | Language | Video's own language | "in English", "in French", any language name |
+| Multi-language | | "in English and French", "in en,fr,es" |
 
-Language note: ytscribe uses the video's original language by default: a French video gives you a French transcript. If you request a different language and subtitles in that language aren't available, it falls back to the video's original language and tells you which one was used.
+Timestamps in markdown output are clickable links that open the video at that exact moment. In plain text, they stay as plain brackets.
+
+JSON export produces one structured object per video (or an array for batches) with full metadata, word count, and transcript text. When timestamps are enabled, a `segments` array is included with per-line time, seconds, URL, and text. CSV produces one row per video that opens directly in Excel or Sheets.
+
+Videos with YouTube chapters are automatically detected and split into labeled sections. Chapters are parsed from the video description using the same rules as YouTube (3+ timestamps starting at 0:00). To disable, say "no chapters" or "flat".
+
+Multi-language pulls transcripts in multiple languages for the same video in one request. Each language gets its own output file (with a language suffix). In JSON, all languages are grouped under a `transcripts` key.
 
 If you specify a preference in your first message, ytscribe silently honors it.
 
@@ -159,10 +169,36 @@ python3 scripts/ytscribe.py \
   --merge true \
   --timestamps false \
   --lang en \
+  --chapters true \
   --output-dir ./output
 ```
 
+All flags: `--format` (txt, md, json, csv), `--merge` (true/false), `--timestamps` (true/false), `--lang` (comma-separated codes like `en,fr,es`), `--chapters` (true/false), `--output-dir`, `--config` (path to config file).
+
 Results are returned as JSON for easy parsing by the AI or downstream tools.
+
+### Persistent config
+
+Power users can create a `ytscribe.config.json` file to set preferred defaults:
+
+```json
+{
+  "format": "json",
+  "timestamps": true,
+  "lang": "en"
+}
+```
+
+The script auto-detects this file by walking up from the working directory. CLI flags always override config values. All keys are optional. See [SKILL.md](SKILL.md) for the full list of supported keys.
+
+### Running tests
+
+```bash
+pip install pytest
+python3 -m pytest tests/ -v
+```
+
+84 unit tests cover chapter parsing, VTT deduplication, all output formats, config validation, and filename sanitization.
 
 ---
 
