@@ -73,12 +73,12 @@ def parse_chapters_from_description(description: str) -> list[dict]:
             "title": title.strip()
         })
 
+    # Sort by time (descriptions are usually in order, but be safe)
+    chapters.sort(key=lambda c: c["time_seconds"])
+
     # Must start at or near 0:00 (YouTube's own rule)
     if chapters and chapters[0]["time_seconds"] > 5:
         return []
-
-    # Sort by time (descriptions are usually in order, but be safe)
-    chapters.sort(key=lambda c: c["time_seconds"])
 
     return chapters
 
