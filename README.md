@@ -101,21 +101,28 @@ If you specify a preference in your first message, ytscribe silently honors it.
 
 ## What you get
 
-Every transcript includes a clean metadata header:
+Every transcript includes a rich metadata header:
 
 ```markdown
-# The Intelligence Age — Sam Altman
+# The Intelligence Age -- Sam Altman
 
+- **ID:** H6eYLpCgAI0
 - **Channel:** Y Combinator
 - **Duration:** 47m 12s
 - **URL:** https://youtube.com/watch?v=H6eYLpCgAI0
 - **Date:** 2024-10-15
+- **Views:** 1,234,567
+- **Likes:** 45,678
+- **Tags:** AI, technology, future
+- **Description:** Sam Altman discusses the transition to the intelligence age...
 
 ---
 
 The transition to the intelligence age is happening faster than most people expected.
 What we're building now will define the next century...
 ```
+
+Videos with YouTube chapters are automatically split into labeled sections with headings.
 
 Batch runs summarize results at the end:
 

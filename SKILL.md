@@ -148,10 +148,16 @@ Each transcript (whether inline, in a file, or as a section in a merged file) in
 ```
 # {Video Title}
 
+- **ID:** {video ID}
 - **Channel:** {channel name}
 - **Duration:** {formatted duration}
 - **URL:** {video URL}
 - **Date:** {upload date if available}
+- **Views:** {view count}
+- **Likes:** {like count}
+- **Thumbnail:** {thumbnail URL}
+- **Tags:** {comma-separated tags}
+- **Description:** {first 300 chars of description}
 
 ---
 
@@ -161,14 +167,24 @@ Each transcript (whether inline, in a file, or as a section in a merged file) in
 **Plain text format:**
 ```
 {Video Title}
+ID: {video ID}
 Channel: {channel name}
 Duration: {formatted duration}
 URL: {video URL}
 Date: {upload date if available}
+Views: {view count}
+Likes: {like count}
+Thumbnail: {thumbnail URL}
+Tags: {comma-separated tags}
+Description: {first 300 chars of description}
 ============================================================
 
 {transcript text}
 ```
+
+Metadata fields like thumbnail, tags, and description only appear when available. View and like
+counts show "N/A" if YouTube does not return them (rare, but possible for some private or
+restricted videos).
 
 **Timestamped format (either md or txt):**
 ```

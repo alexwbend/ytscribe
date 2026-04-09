@@ -84,35 +84,50 @@ def parse_chapters_from_description(description: str, video_duration: int = 0) -
 def get_video_metadata(video_id: str, fetch_description: bool = False) -> dict:
     """Fetch video metadata without downloading. Retries up to 3 times on failure.
 
+    Always fetches rich metadata (view count, like count, thumbnail, tags).
     If fetch_description is True, also fetches the video description
     (needed for chapter parsing).
     """
-    print_fields = "%(title)s|||%(channel)s|||%(duration)s|||%(upload_date)s"
+    # Use JSON dump for reliable parsing -- avoids delimiter issues with
+    # fields like description that can contain arbitrary text.
+    json_fields = [
+        "title", "channel", "duration", "upload_date",
+        "view_count", "like_count", "thumbnail", "tags"
+    ]
     if fetch_description:
-        print_fields += "|||%(description)s"
+        json_fields.append("description")
 
     for attempt in range(1, MAX_RETRIES + 1):
         result = run_ytdlp([
             "--skip-download",
-            "--print", print_fields,
+            "--dump-json",
             f"https://www.youtube.com/watch?v={video_id}"
         ])
 
         if result.returncode == 0:
-            parts = result.stdout.strip().split("|||")
-            if len(parts) >= 4:
-                duration = int(parts[2]) if parts[2].isdigit() else 0
-                date_raw = parts[3]
-                date_formatted = f"{date_raw[:4]}-{date_raw[4:6]}-{date_raw[6:8]}" if len(date_raw) == 8 else date_raw
+            try:
+                data = json.loads(result.stdout)
+                duration = int(data.get("duration") or 0)
+                date_raw = str(data.get("upload_date") or "")
+                date_formatted = (
+                    f"{date_raw[:4]}-{date_raw[4:6]}-{date_raw[6:8]}"
+                    if len(date_raw) == 8 else date_raw
+                )
                 meta = {
-                    "title": parts[0],
-                    "channel": parts[1],
+                    "title": data.get("title") or f"Video {video_id}",
+                    "channel": data.get("channel") or data.get("uploader") or "Unknown",
                     "duration": duration,
-                    "date": date_formatted
+                    "date": date_formatted,
+                    "view_count": data.get("view_count"),
+                    "like_count": data.get("like_count"),
+                    "thumbnail": data.get("thumbnail") or "",
+                    "tags": data.get("tags") or [],
                 }
-                if fetch_description and len(parts) >= 5:
-                    meta["description"] = "|||".join(parts[4:])  # rejoin in case description contains |||
+                if fetch_description:
+                    meta["description"] = data.get("description") or ""
                 return meta
+            except (json.JSONDecodeError, KeyError):
+                pass  # fall through to retry logic
 
         # Check for rate limiting
         stderr = result.stderr or ""
@@ -126,7 +141,11 @@ def get_video_metadata(video_id: str, fetch_description: bool = False) -> dict:
         # Non-429 failure — no point retrying
         break
 
-    return {"title": f"Video {video_id}", "channel": "Unknown", "duration": 0, "date": "Unknown"}
+    return {
+        "title": f"Video {video_id}", "channel": "Unknown", "duration": 0,
+        "date": "Unknown", "view_count": None, "like_count": None,
+        "thumbnail": "", "tags": []
+    }
 
 
 def format_duration(seconds: int) -> str:
@@ -300,40 +319,85 @@ def clean_vtt(vtt_path: str, keep_timestamps: bool = False, chapters: list[dict]
     return "\n\n".join(sections)
 
 
+def _format_count(n) -> str:
+    """Format a number with commas, or return 'N/A' if unavailable."""
+    if n is None:
+        return "N/A"
+    return f"{int(n):,}"
+
+
 def format_output(video_id: str, metadata: dict, transcript: str, fmt: str) -> str:
     """Format a single transcript with metadata.
 
-    Handles chapter markers (__CHAPTER__:Title) embedded by clean_vtt,
-    converting them to proper heading syntax for the chosen format.
+    Includes video ID and rich metadata (views, likes, thumbnail, tags,
+    description) when available. Handles chapter markers (__CHAPTER__:Title)
+    embedded by clean_vtt, converting them to proper heading syntax.
     """
     url = f"https://www.youtube.com/watch?v={video_id}"
     duration = format_duration(metadata["duration"])
+    views = _format_count(metadata.get("view_count"))
+    likes = _format_count(metadata.get("like_count"))
+    thumbnail = metadata.get("thumbnail", "")
+    tags = metadata.get("tags", [])
+    description = metadata.get("description", "")
 
     if fmt == "md":
-        header = f"""# {metadata['title']}
+        lines = [
+            f"# {metadata['title']}",
+            "",
+            f"- **ID:** {video_id}",
+            f"- **Channel:** {metadata['channel']}",
+            f"- **Duration:** {duration}",
+            f"- **URL:** {url}",
+            f"- **Date:** {metadata['date']}",
+            f"- **Views:** {views}",
+            f"- **Likes:** {likes}",
+        ]
+        if thumbnail:
+            lines.append(f"- **Thumbnail:** {thumbnail}")
+        if tags:
+            lines.append(f"- **Tags:** {', '.join(tags)}")
+        if description:
+            # Collapse to first 300 chars to keep header compact
+            desc_preview = description[:300].replace("\n", " ").strip()
+            if len(description) > 300:
+                desc_preview += "..."
+            lines.append(f"- **Description:** {desc_preview}")
 
-- **Channel:** {metadata['channel']}
-- **Duration:** {duration}
-- **URL:** {url}
-- **Date:** {metadata['date']}
+        lines.append("")
+        lines.append("---")
+        lines.append("")
 
----
-
-"""
-        # Replace chapter markers with markdown h2 headings
+        header = "\n".join(lines)
         body = re.sub(r"^__CHAPTER__:(.+)$", r"## \1", transcript, flags=re.MULTILINE)
         return header + body + "\n"
 
     else:  # txt
-        header = f"""{metadata['title']}
-Channel: {metadata['channel']}
-Duration: {duration}
-URL: {url}
-Date: {metadata['date']}
-{'=' * 60}
+        lines = [
+            metadata['title'],
+            f"ID: {video_id}",
+            f"Channel: {metadata['channel']}",
+            f"Duration: {duration}",
+            f"URL: {url}",
+            f"Date: {metadata['date']}",
+            f"Views: {views}",
+            f"Likes: {likes}",
+        ]
+        if thumbnail:
+            lines.append(f"Thumbnail: {thumbnail}")
+        if tags:
+            lines.append(f"Tags: {', '.join(tags)}")
+        if description:
+            desc_preview = description[:300].replace("\n", " ").strip()
+            if len(description) > 300:
+                desc_preview += "..."
+            lines.append(f"Description: {desc_preview}")
 
-"""
-        # Replace chapter markers with plain text section headers
+        lines.append("=" * 60)
+        lines.append("")
+
+        header = "\n".join(lines)
+
         def _txt_chapter(m):
             title = m.group(1)
             return f"\n{title}\n{'-' * len(title)}"
