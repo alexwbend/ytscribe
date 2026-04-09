@@ -32,12 +32,69 @@ def run_ytdlp(args: list[str], capture_output=True) -> subprocess.CompletedProce
     return subprocess.run(cmd, capture_output=capture_output, text=True, timeout=60)
 
 
-def get_video_metadata(video_id: str) -> dict:
-    """Fetch video metadata without downloading. Retries up to 3 times on failure."""
+def parse_chapters_from_description(description: str, video_duration: int = 0) -> list[dict]:
+    """Parse chapter timestamps from a YouTube video description.
+
+    YouTube chapters are lines in the description that start with a timestamp
+    like '0:00 Introduction' or '1:23:45 Deep dive into topic'.
+
+    Returns a list of dicts: [{"time_seconds": 0, "time_label": "0:00", "title": "Introduction"}, ...]
+    Returns an empty list if no chapters are found (graceful fallback).
+    """
+    if not description:
+        return []
+
+    # Match timestamps at the start of a line: 0:00, 12:34, 1:23:45
+    chapter_pattern = re.compile(
+        r"^[\s\-\•]*(\d{1,2}:\d{2}(?::\d{2})?)\s*[-–—:]?\s*(.+)$",
+        re.MULTILINE
+    )
+
+    matches = chapter_pattern.findall(description)
+
+    # YouTube requires at least 3 chapters starting from 0:00 to display them.
+    # We use the same rule: fewer than 3 timestamp lines = probably not chapters.
+    if len(matches) < 3:
+        return []
+
+    chapters = []
+    for time_str, title in matches:
+        parts = time_str.split(":")
+        if len(parts) == 3:
+            seconds = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+        else:
+            seconds = int(parts[0]) * 60 + int(parts[1])
+
+        chapters.append({
+            "time_seconds": seconds,
+            "time_label": time_str,
+            "title": title.strip()
+        })
+
+    # Must start at or near 0:00 (YouTube's own rule)
+    if chapters and chapters[0]["time_seconds"] > 5:
+        return []
+
+    # Sort by time (descriptions are usually in order, but be safe)
+    chapters.sort(key=lambda c: c["time_seconds"])
+
+    return chapters
+
+
+def get_video_metadata(video_id: str, fetch_description: bool = False) -> dict:
+    """Fetch video metadata without downloading. Retries up to 3 times on failure.
+
+    If fetch_description is True, also fetches the video description
+    (needed for chapter parsing).
+    """
+    print_fields = "%(title)s|||%(channel)s|||%(duration)s|||%(upload_date)s"
+    if fetch_description:
+        print_fields += "|||%(description)s"
+
     for attempt in range(1, MAX_RETRIES + 1):
         result = run_ytdlp([
             "--skip-download",
-            "--print", "%(title)s|||%(channel)s|||%(duration)s|||%(upload_date)s",
+            "--print", print_fields,
             f"https://www.youtube.com/watch?v={video_id}"
         ])
 
@@ -47,12 +104,15 @@ def get_video_metadata(video_id: str) -> dict:
                 duration = int(parts[2]) if parts[2].isdigit() else 0
                 date_raw = parts[3]
                 date_formatted = f"{date_raw[:4]}-{date_raw[4:6]}-{date_raw[6:8]}" if len(date_raw) == 8 else date_raw
-                return {
+                meta = {
                     "title": parts[0],
                     "channel": parts[1],
                     "duration": duration,
                     "date": date_formatted
                 }
+                if fetch_description and len(parts) >= 5:
+                    meta["description"] = "|||".join(parts[4:])  # rejoin in case description contains |||
+                return meta
 
         # Check for rate limiting
         stderr = result.stderr or ""
@@ -139,64 +199,116 @@ def download_transcript(video_id: str, work_dir: str, lang: str = "en") -> str |
     return None
 
 
-def clean_vtt(vtt_path: str, keep_timestamps: bool = False) -> str:
+def _vtt_timestamp_to_seconds(ts: str) -> int:
+    """Convert a VTT timestamp like '00:12:34.567' to integer seconds."""
+    ts = ts.split(".")[0]  # drop milliseconds
+    parts = ts.split(":")
+    if len(parts) == 3:
+        return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+    elif len(parts) == 2:
+        return int(parts[0]) * 60 + int(parts[1])
+    return 0
+
+
+def clean_vtt(vtt_path: str, keep_timestamps: bool = False, chapters: list[dict] | None = None) -> str:
     """Clean VTT subtitle file to plain text.
-    
+
     YouTube auto-generated VTT files have duplicate lines because captions
     are shown progressively with overlapping timestamps. This function
     deduplicates while preserving speaking order.
+
+    If chapters are provided, the transcript is split into sections with
+    chapter headings inserted at the appropriate positions.
     """
     with open(vtt_path, "r", encoding="utf-8") as f:
         content = f.read()
-    
+
     lines = content.split("\n")
-    text_lines = []
+    # First pass: extract (seconds, display_timestamp, text) tuples
+    entries = []
     seen = set()
-    current_timestamp = None
-    
+    current_raw_ts = None  # full VTT timestamp for seconds conversion
+    current_display_ts = None  # simplified display timestamp
+
     for line in lines:
         # Skip VTT header and metadata
         if line.startswith("WEBVTT") or line.startswith("Kind:") or line.startswith("Language:"):
             continue
-        
-        # Capture timestamp if needed
+
+        # Capture timestamp
         ts_match = re.match(r"^(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->", line)
         if ts_match:
-            current_timestamp = ts_match.group(1)
+            current_raw_ts = ts_match.group(1)
             # Simplify timestamp: remove hours if 00, remove milliseconds
-            ts = current_timestamp
+            ts = current_raw_ts.split(".")[0]
             if ts.startswith("00:"):
                 ts = ts[3:]
-            ts = ts.split(".")[0]  # Remove milliseconds
-            current_timestamp = ts
+            current_display_ts = ts
             continue
-        
+
         # Skip empty lines
         if not line.strip():
             continue
-        
+
         # Strip HTML tags (YouTube uses <c> tags for word-level timing)
         clean = re.sub(r"<[^>]+>", "", line).strip()
-        
+
         if clean and clean not in seen:
             seen.add(clean)
-            if keep_timestamps and current_timestamp:
-                text_lines.append(f"[{current_timestamp}] {clean}")
+            seconds = _vtt_timestamp_to_seconds(current_raw_ts) if current_raw_ts else 0
+            entries.append((seconds, current_display_ts, clean))
+
+    # If no chapters, produce flat output (v1 behavior)
+    if not chapters:
+        if keep_timestamps:
+            return "\n".join(f"[{ts}] {text}" for _, ts, text in entries)
+        else:
+            return " ".join(text for _, _, text in entries)
+
+    # With chapters: bucket entries into chapter sections
+    # Build boundary list: [(start_seconds, chapter_title), ...]
+    boundaries = [(ch["time_seconds"], ch["title"]) for ch in chapters]
+
+    # Assign each entry to a chapter
+    chapter_buckets: dict[int, list[tuple]] = {i: [] for i in range(len(boundaries))}
+
+    for seconds, display_ts, text in entries:
+        # Find which chapter this timestamp belongs to
+        chapter_idx = 0
+        for i, (boundary_sec, _) in enumerate(boundaries):
+            if seconds >= boundary_sec:
+                chapter_idx = i
             else:
-                text_lines.append(clean)
-    
-    if keep_timestamps:
-        return "\n".join(text_lines)
-    else:
-        # Join into flowing prose with spaces
-        return " ".join(text_lines)
+                break
+        chapter_buckets[chapter_idx].append((seconds, display_ts, text))
+
+    # Build output with chapter headings
+    sections = []
+    for i, (_, chapter_title) in enumerate(boundaries):
+        bucket = chapter_buckets[i]
+        if not bucket:
+            continue
+
+        if keep_timestamps:
+            body = "\n".join(f"[{ts}] {text}" for _, ts, text in bucket)
+        else:
+            body = " ".join(text for _, _, text in bucket)
+
+        # Use a marker that format_output will replace with proper heading syntax
+        sections.append(f"__CHAPTER__:{chapter_title}\n\n{body}")
+
+    return "\n\n".join(sections)
 
 
 def format_output(video_id: str, metadata: dict, transcript: str, fmt: str) -> str:
-    """Format a single transcript with metadata."""
+    """Format a single transcript with metadata.
+
+    Handles chapter markers (__CHAPTER__:Title) embedded by clean_vtt,
+    converting them to proper heading syntax for the chosen format.
+    """
     url = f"https://www.youtube.com/watch?v={video_id}"
     duration = format_duration(metadata["duration"])
-    
+
     if fmt == "md":
         header = f"""# {metadata['title']}
 
@@ -208,8 +320,10 @@ def format_output(video_id: str, metadata: dict, transcript: str, fmt: str) -> s
 ---
 
 """
-        return header + transcript + "\n"
-    
+        # Replace chapter markers with markdown h2 headings
+        body = re.sub(r"^__CHAPTER__:(.+)$", r"## \1", transcript, flags=re.MULTILINE)
+        return header + body + "\n"
+
     else:  # txt
         header = f"""{metadata['title']}
 Channel: {metadata['channel']}
@@ -219,7 +333,13 @@ Date: {metadata['date']}
 {'=' * 60}
 
 """
-        return header + transcript + "\n"
+        # Replace chapter markers with plain text section headers
+        def _txt_chapter(m):
+            title = m.group(1)
+            return f"\n{title}\n{'-' * len(title)}"
+
+        body = re.sub(r"^__CHAPTER__:(.+)$", _txt_chapter, transcript, flags=re.MULTILINE)
+        return header + body + "\n"
 
 
 def sanitize_filename(title: str, max_length: int = 80) -> str:
@@ -246,47 +366,65 @@ def process_videos(
     fmt: str = "md",
     merge: bool = False,
     keep_timestamps: bool = False,
-    lang: str = "en"
+    lang: str = "en",
+    chapters: bool = True
 ) -> dict:
     """Process a list of video IDs and produce output files.
-    
+
+    Args:
+        chapters: If True (default), detect and use YouTube chapters when
+                  available. Falls back gracefully to flat output when a
+                  video has no chapters.
+
     Returns a summary dict with results.
     """
     os.makedirs(output_dir, exist_ok=True)
     work_dir = os.path.join(output_dir, ".work")
     os.makedirs(work_dir, exist_ok=True)
-    
+
     results = {
         "success": [],
         "no_subs": [],
         "failed": [],
         "output_files": []
     }
-    
+
     merged_content = []
-    
+
     for i, vid in enumerate(video_ids, 1):
         vid = vid.strip()
         if not vid:
             continue
-        
+
         print(f"[{i}/{len(video_ids)}] Processing: {vid}", flush=True)
-        
-        # Get metadata
-        meta = get_video_metadata(vid)
+
+        # Get metadata (fetch description too if chapters are enabled)
+        meta = get_video_metadata(vid, fetch_description=chapters)
         print(f"  Title: {meta['title']}", flush=True)
-        
+
+        # Parse chapters from description if available
+        video_chapters = []
+        if chapters and meta.get("description"):
+            video_chapters = parse_chapters_from_description(
+                meta["description"], meta.get("duration", 0)
+            )
+            if video_chapters:
+                print(f"  📑 Found {len(video_chapters)} chapters", flush=True)
+
         # Download transcript
         vtt_path = download_transcript(vid, work_dir, lang)
-        
+
         if vtt_path is None:
             print(f"  ⚠ No transcript available", flush=True)
             results["no_subs"].append({"id": vid, "title": meta["title"]})
             continue
-        
-        # Clean the VTT file
+
+        # Clean the VTT file (pass chapters if found, otherwise None for flat output)
         try:
-            transcript = clean_vtt(vtt_path, keep_timestamps)
+            transcript = clean_vtt(
+                vtt_path, keep_timestamps,
+                chapters=video_chapters if video_chapters else None
+            )
             word_count = len(transcript.split())
             print(f"  ✓ Extracted {word_count:,} words", flush=True)
         except Exception as e:
@@ -312,7 +450,8 @@ def process_videos(
             "id": vid,
             "title": meta["title"],
             "words": word_count,
-            "duration": meta["duration"]
+            "duration": meta["duration"],
+            "chapters": len(video_chapters)
         })
         
         # Delay between videos to avoid YouTube rate limits
@@ -376,7 +515,9 @@ def main():
     parser.add_argument("--output-dir", default="./ytscribe_output", help="Output directory")
     parser.add_argument("--timestamps", type=lambda x: x.lower() == "true", default=False, help="Keep timestamps")
     parser.add_argument("--lang", default="en", help="Subtitle language code")
-    
+    parser.add_argument("--chapters", type=lambda x: x.lower() == "true", default=True,
+                        help="Detect and use YouTube chapters (default: true)")
+
     args = parser.parse_args()
     
     video_ids = [v.strip() for v in args.videos.split(",") if v.strip()]
@@ -395,7 +536,8 @@ def main():
         fmt=args.format,
         merge=args.merge,
         keep_timestamps=args.timestamps,
-        lang=args.lang
+        lang=args.lang,
+        chapters=args.chapters
     )
     
     # Output results as JSON for Claude to parse

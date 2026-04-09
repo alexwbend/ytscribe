@@ -131,6 +131,7 @@ After delivering, add one line:
 | File format | Markdown (.md) | "text file", "plain text", ".txt", "raw text" |
 | Structure | Individual files | "merged", "one file", "combine all" |
 | Language | Video's own language | "in English", "in French", "Spanish subtitles", any language name or code |
+| Chapters | ON (auto-detected) | "no chapters", "flat", "without chapters" to disable |
 | Zip | Auto if 6+ individual files | User never needs to request this |
 
 The override rule: if the user mentions ANY preference in their initial message, apply it silently.
@@ -181,6 +182,42 @@ Date: {upload date if available}
 First line of speech second line of speech third line of speech...
 ```
 
+**Chapter-aware format (auto-detected):**
+
+When a video has YouTube chapters (timestamp markers in the description), the transcript is automatically
+split into named sections. No user action required -- if chapters exist, they appear; if not, output is
+flat prose as usual.
+
+Markdown:
+```
+## Introduction
+
+First line of speech...
+
+## The main argument
+
+Next section of speech...
+```
+
+Plain text:
+```
+Introduction
+------------
+
+First line of speech...
+
+The main argument
+-----------------
+
+Next section of speech...
+```
+
+Chapters are detected by parsing the video description for lines starting with timestamps
+(e.g. `0:00 Introduction`, `12:34 Deep dive`). YouTube requires at least 3 chapters starting
+from 0:00 to display them, and the skill uses the same rule.
+
+To disable chapters for a specific request, the user can say "no chapters", "flat", or "without chapters".
+
 ---
 
 ## Execution
@@ -201,7 +238,8 @@ python3 "$SCRIPT" \
   --merge {true|false} \
   --output-dir ./ytscribe_output \
   --timestamps {true|false} \
-  --lang {language_code}
+  --lang {language_code} \
+  --chapters {true|false}
 ```
 
 If the script cannot be found, check that `scripts/ytscribe.py` has been added as a knowledge file, then write it to a temp location before running.
