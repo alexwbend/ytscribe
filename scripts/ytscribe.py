@@ -13,13 +13,12 @@ import csv
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
 import zipfile
-from datetime import timedelta
-from pathlib import Path
-from io import StringIO
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Delay between requests to avoid YouTube 429 rate limits.
@@ -743,7 +742,6 @@ def process_videos(
 
     # Auto-zip if 6+ individual files
     if not merge and len(results["output_files"]) >= 6:
-        from datetime import datetime
         date_str = datetime.now().strftime("%Y-%m-%d")
         zip_path = os.path.join(output_dir, f"ytscribe_{len(results['output_files'])}_transcripts_{date_str}.zip")
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -753,7 +751,6 @@ def process_videos(
         print(f"\n📦 Zipped {len(results['output_files'])} transcripts → {os.path.basename(zip_path)}", flush=True)
     
     # Clean up work directory
-    import shutil
     shutil.rmtree(work_dir, ignore_errors=True)
     
     # Print summary
@@ -837,7 +834,7 @@ def load_config(config_path: str | None = None) -> dict:
             continue
         # Extra validation for constrained values
         if key == "format" and value not in VALID_FORMATS:
-            print(f"⚠ Config: 'format' must be one of {VALID_FORMATS}, got '{value}' — skipping", file=sys.stderr)
+            print(f"⚠ Config: 'format' must be one of {sorted(VALID_FORMATS)}, got '{value}' — skipping", file=sys.stderr)
             continue
         validated[key] = value
 
@@ -852,8 +849,13 @@ def load_config(config_path: str | None = None) -> dict:
 
 
 def main():
-    # --- Load config file (if present) ---
-    config = load_config()
+    # --- First pass: parse only --config to know which config source to use ---
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", default=None)
+    pre_args, _ = pre_parser.parse_known_args()
+
+    # Load config: explicit path wins, otherwise auto-detect from CWD
+    config = load_config(pre_args.config)
 
     # --- Build argparse with config-aware defaults ---
     # Config values override hardcoded defaults; CLI flags override config.
@@ -877,21 +879,6 @@ def main():
                         help="Path to config file (default: auto-detect ytscribe.config.json)")
 
     args = parser.parse_args()
-
-    # If --config was explicitly passed, reload config from that path
-    if args.config is not None:
-        explicit_config = load_config(args.config)
-        if explicit_config:
-            # Re-parse with the explicit config as defaults (CLI flags still win)
-            parser.set_defaults(
-                format=explicit_config.get("format", "md"),
-                merge=explicit_config.get("merge", False),
-                output_dir=explicit_config.get("output_dir", "./ytscribe_output"),
-                timestamps=explicit_config.get("timestamps", False),
-                lang=explicit_config.get("lang", "en"),
-                chapters=explicit_config.get("chapters", True),
-            )
-            args = parser.parse_args()
 
     video_ids = [v.strip() for v in args.videos.split(",") if v.strip()]
 
