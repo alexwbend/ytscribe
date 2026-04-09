@@ -34,7 +34,7 @@ def run_ytdlp(args: list[str], capture_output=True) -> subprocess.CompletedProce
     return subprocess.run(cmd, capture_output=capture_output, text=True, timeout=120)
 
 
-def parse_chapters_from_description(description: str, video_duration: int = 0) -> list[dict]:
+def parse_chapters_from_description(description: str) -> list[dict]:
     """Parse chapter timestamps from a YouTube video description.
 
     YouTube chapters are lines in the description that start with a timestamp
@@ -83,12 +83,13 @@ def parse_chapters_from_description(description: str, video_duration: int = 0) -
     return chapters
 
 
-def get_video_metadata(video_id: str, fetch_description: bool = False) -> dict:
+def get_video_metadata(video_id: str, include_description: bool = False) -> dict:
     """Fetch video metadata without downloading. Retries up to 3 times on failure.
 
     Always fetches rich metadata (view count, like count, thumbnail, tags).
-    If fetch_description is True, also fetches the video description
-    (needed for chapter parsing).
+    If include_description is True, the video description is included in
+    the returned dict (needed for chapter parsing). The full JSON blob is
+    always downloaded regardless; this flag only controls the return value.
     """
     # Use --dump-json for reliable parsing -- avoids delimiter issues with
     # fields like description that can contain arbitrary text.
@@ -118,7 +119,7 @@ def get_video_metadata(video_id: str, fetch_description: bool = False) -> dict:
                     "thumbnail": data.get("thumbnail") or "",
                     "tags": data.get("tags") or [],
                 }
-                if fetch_description:
+                if include_description:
                     meta["description"] = data.get("description") or ""
                 return meta
             except (json.JSONDecodeError, KeyError):
@@ -401,7 +402,7 @@ def clean_vtt(
     return "\n\n".join(sections)
 
 
-def _format_count(n) -> str:
+def _format_count(n: int | None) -> str:
     """Format a number with commas, or return 'N/A' if unavailable."""
     if n is None:
         return "N/A"
@@ -555,15 +556,13 @@ def process_videos(
         print(f"[{i}/{len(video_ids)}] Processing: {vid}", flush=True)
 
         # Get metadata (fetch description too if chapters are enabled)
-        meta = get_video_metadata(vid, fetch_description=chapters)
+        meta = get_video_metadata(vid, include_description=chapters)
         print(f"  Title: {meta['title']}", flush=True)
 
         # Parse chapters from description if available
         video_chapters = []
         if chapters and meta.get("description"):
-            video_chapters = parse_chapters_from_description(
-                meta["description"], meta.get("duration", 0)
-            )
+            video_chapters = parse_chapters_from_description(meta["description"])
             if video_chapters:
                 print(f"  📑 Found {len(video_chapters)} chapters", flush=True)
 
@@ -612,7 +611,9 @@ def process_videos(
             # Format and store output
             if fmt in ("json", "csv"):
                 # For multi-lang, collect per-language transcripts
-                lang_entry = {"transcript": transcript, "word_count": word_count}
+                # Strip internal chapter markers from transcript text for structured exports
+                clean_transcript = re.sub(r"^__CHAPTER__:.+\n?\n?", "", transcript, flags=re.MULTILINE)
+                lang_entry = {"transcript": clean_transcript, "word_count": word_count}
                 if fmt == "json" and keep_timestamps:
                     lang_entry["segments"] = structured_transcript(
                         vtt_path, vid,
