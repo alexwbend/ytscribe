@@ -18,6 +18,7 @@ import sys
 import time
 import zipfile
 from datetime import timedelta
+from pathlib import Path
 from io import StringIO
 from pathlib import Path
 
@@ -773,30 +774,135 @@ def process_videos(
     return results
 
 
+CONFIG_FILENAME = "ytscribe.config.json"
+
+# Valid keys and their expected types for config validation
+CONFIG_SCHEMA = {
+    "format": str,
+    "merge": bool,
+    "timestamps": bool,
+    "lang": str,
+    "chapters": bool,
+    "output_dir": str,
+}
+
+VALID_FORMATS = {"txt", "md", "json", "csv"}
+
+
+def find_config_file(start_dir: str | None = None) -> str | None:
+    """Walk up from start_dir looking for ytscribe.config.json.
+
+    Returns the path to the first config file found, or None.
+    Stops at the filesystem root.
+    """
+    current = Path(start_dir) if start_dir else Path.cwd()
+    for directory in [current, *current.parents]:
+        candidate = directory / CONFIG_FILENAME
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def load_config(config_path: str | None = None) -> dict:
+    """Load and validate a ytscribe config file.
+
+    Returns a dict of validated config values. Unknown keys are ignored.
+    Invalid values print a warning and are skipped. Returns an empty
+    dict if no config file is found or if it cannot be parsed.
+    """
+    if config_path is None:
+        config_path = find_config_file()
+    if config_path is None:
+        return {}
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"⚠ Could not read config file {config_path}: {e}", file=sys.stderr)
+        return {}
+
+    if not isinstance(raw, dict):
+        print(f"⚠ Config file must be a JSON object, got {type(raw).__name__}", file=sys.stderr)
+        return {}
+
+    validated = {}
+    for key, expected_type in CONFIG_SCHEMA.items():
+        if key not in raw:
+            continue
+        value = raw[key]
+        if not isinstance(value, expected_type):
+            print(f"⚠ Config: '{key}' should be {expected_type.__name__}, got {type(value).__name__} — skipping",
+                  file=sys.stderr)
+            continue
+        # Extra validation for constrained values
+        if key == "format" and value not in VALID_FORMATS:
+            print(f"⚠ Config: 'format' must be one of {VALID_FORMATS}, got '{value}' — skipping", file=sys.stderr)
+            continue
+        validated[key] = value
+
+    unknown_keys = set(raw.keys()) - set(CONFIG_SCHEMA.keys())
+    if unknown_keys:
+        print(f"⚠ Config: unknown keys ignored: {', '.join(sorted(unknown_keys))}", file=sys.stderr)
+
+    if validated:
+        print(f"✓ Loaded config from {config_path}", flush=True)
+
+    return validated
+
+
 def main():
+    # --- Load config file (if present) ---
+    config = load_config()
+
+    # --- Build argparse with config-aware defaults ---
+    # Config values override hardcoded defaults; CLI flags override config.
     parser = argparse.ArgumentParser(description="ytscribe — YouTube Transcript Extractor")
     parser.add_argument("--videos", required=True, help="Comma-separated video IDs")
-    parser.add_argument("--format", choices=["txt", "md", "json", "csv"], default="md", help="Output format")
-    parser.add_argument("--merge", type=lambda x: x.lower() == "true", default=False, help="Merge into single file")
-    parser.add_argument("--output-dir", default="./ytscribe_output", help="Output directory")
-    parser.add_argument("--timestamps", type=lambda x: x.lower() == "true", default=False, help="Keep timestamps")
-    parser.add_argument("--lang", default="en",
+    parser.add_argument("--format", choices=["txt", "md", "json", "csv"],
+                        default=config.get("format", "md"), help="Output format")
+    parser.add_argument("--merge", type=lambda x: x.lower() == "true",
+                        default=config.get("merge", False), help="Merge into single file")
+    parser.add_argument("--output-dir",
+                        default=config.get("output_dir", "./ytscribe_output"), help="Output directory")
+    parser.add_argument("--timestamps", type=lambda x: x.lower() == "true",
+                        default=config.get("timestamps", False), help="Keep timestamps")
+    parser.add_argument("--lang",
+                        default=config.get("lang", "en"),
                         help="Subtitle language code(s), comma-separated for multi-language (e.g. en,fr,es)")
-    parser.add_argument("--chapters", type=lambda x: x.lower() == "true", default=True,
+    parser.add_argument("--chapters", type=lambda x: x.lower() == "true",
+                        default=config.get("chapters", True),
                         help="Detect and use YouTube chapters (default: true)")
+    parser.add_argument("--config", default=None,
+                        help="Path to config file (default: auto-detect ytscribe.config.json)")
 
     args = parser.parse_args()
-    
+
+    # If --config was explicitly passed, reload config from that path
+    if args.config is not None:
+        explicit_config = load_config(args.config)
+        if explicit_config:
+            # Re-parse with the explicit config as defaults (CLI flags still win)
+            parser.set_defaults(
+                format=explicit_config.get("format", "md"),
+                merge=explicit_config.get("merge", False),
+                output_dir=explicit_config.get("output_dir", "./ytscribe_output"),
+                timestamps=explicit_config.get("timestamps", False),
+                lang=explicit_config.get("lang", "en"),
+                chapters=explicit_config.get("chapters", True),
+            )
+            args = parser.parse_args()
+
     video_ids = [v.strip() for v in args.videos.split(",") if v.strip()]
-    
+
     if not video_ids:
         print("Error: No video IDs provided", file=sys.stderr)
         sys.exit(1)
-    
+
     if len(video_ids) > 50:
         print(f"Warning: {len(video_ids)} videos requested. Processing first 50.", file=sys.stderr)
         video_ids = video_ids[:50]
-    
+
     # Parse language codes (comma-separated)
     lang_list = [l.strip() for l in args.lang.split(",") if l.strip()]
     if not lang_list:

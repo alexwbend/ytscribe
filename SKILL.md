@@ -134,10 +134,15 @@ After delivering, add one line:
 | Multi-language | OFF (single language) | "in English and French", "in en,fr,es", "both English and Spanish" |
 | Chapters | ON (auto-detected) | "no chapters", "flat", "without chapters" to disable |
 | Zip | Auto if 6+ individual files | User never needs to request this |
+| Config file | Auto-detected from working directory | `--config path/to/ytscribe.config.json` |
 
 The override rule: if the user mentions ANY preference in their initial message, apply it silently.
 Do not confirm what they already told you. Do not say "I see you want timestamps, I'll add those."
 Just do it.
+
+**Config file:** If a `ytscribe.config.json` exists in the working directory (or any parent directory),
+the skill reads it automatically and applies those values as defaults. Per-request CLI flags still override
+the config. See the "Persistent user config" section below for details.
 
 ---
 
@@ -295,7 +300,8 @@ python3 "$SCRIPT" \
   --output-dir ./ytscribe_output \
   --timestamps {true|false} \
   --lang {language_code or comma-separated codes} \
-  --chapters {true|false}
+  --chapters {true|false} \
+  --config {path/to/ytscribe.config.json}  # optional
 ```
 
 If the script cannot be found, check that `scripts/ytscribe.py` has been added as a knowledge file, then write it to a temp location before running.
@@ -317,6 +323,52 @@ For transcripts over ~5,000 words: clean up only if the user requests it (e.g. "
 
 ### Step 4: Present output
 Always copy final output files to `/mnt/user-data/outputs/` and use `present_files`.
+
+---
+
+## Persistent user config
+
+Power users can create a `ytscribe.config.json` file to set their preferred defaults once. The skill
+finds and reads this file automatically at the start of every run -- no extra flags needed.
+
+**How it works:**
+
+1. The script searches for `ytscribe.config.json` starting from the current working directory and walking up to parent directories (like `.gitconfig` resolution).
+2. Config values replace the hardcoded defaults.
+3. CLI flags passed at runtime always override the config.
+4. Unknown keys are ignored with a warning. Invalid types are skipped with a warning.
+
+**Supported keys:**
+
+```json
+{
+  "format": "md",
+  "merge": false,
+  "timestamps": false,
+  "lang": "en",
+  "chapters": true,
+  "output_dir": "./ytscribe_output"
+}
+```
+
+All keys are optional. Include only the ones you want to change from the defaults.
+
+**Example:** A user who always wants JSON with timestamps:
+```json
+{
+  "format": "json",
+  "timestamps": true
+}
+```
+
+**Explicit config path:** Pass `--config path/to/ytscribe.config.json` to use a specific config file
+instead of auto-detection.
+
+**Edge cases:**
+- No config file found: runs with hardcoded defaults (existing behavior).
+- Invalid JSON: prints a warning and continues with hardcoded defaults.
+- Partial config: only the provided keys are applied; the rest use hardcoded defaults.
+- Unknown keys: ignored with a warning.
 
 ---
 
