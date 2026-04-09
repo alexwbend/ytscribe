@@ -220,6 +220,32 @@ def download_transcript(video_id: str, work_dir: str, lang: str = "en") -> str |
     return None
 
 
+def download_transcripts_multi(video_id: str, work_dir: str, langs: list[str]) -> dict[str, str | None]:
+    """Download transcripts in multiple languages for a single video.
+
+    Returns a dict mapping each requested language to its VTT path,
+    or None if that language was not available.
+
+    Edge case: if a language is unavailable, it is skipped gracefully.
+    The caller decides what to do with the results.
+    """
+    results = {}
+    for lang in langs:
+        # Use a language-specific subdirectory to avoid filename collisions
+        lang_dir = os.path.join(work_dir, f"{video_id}_{lang}")
+        os.makedirs(lang_dir, exist_ok=True)
+        vtt_path = download_transcript(video_id, lang_dir, lang)
+        results[lang] = vtt_path
+        if vtt_path:
+            print(f"    ✓ [{lang}] downloaded", flush=True)
+        else:
+            print(f"    ⚠ [{lang}] not available", flush=True)
+        # Small delay between language downloads to be safe
+        if len(langs) > 1:
+            time.sleep(1)
+    return results
+
+
 def _vtt_timestamp_to_seconds(ts: str) -> int:
     """Convert a VTT timestamp like '00:12:34.567' to integer seconds."""
     ts = ts.split(".")[0]  # drop milliseconds
@@ -493,18 +519,27 @@ def process_videos(
     fmt: str = "md",
     merge: bool = False,
     keep_timestamps: bool = False,
-    lang: str = "en",
+    langs: list[str] | None = None,
     chapters: bool = True
 ) -> dict:
     """Process a list of video IDs and produce output files.
 
     Args:
+        langs: List of language codes to download. Defaults to ["en"].
+               When multiple languages are requested, each gets its own
+               output file (with language suffix) or its own key in
+               structured exports. Languages that are unavailable for a
+               given video are skipped gracefully.
         chapters: If True (default), detect and use YouTube chapters when
                   available. Falls back gracefully to flat output when a
                   video has no chapters.
 
     Returns a summary dict with results.
     """
+    if langs is None:
+        langs = ["en"]
+    multi_lang = len(langs) > 1
+
     os.makedirs(output_dir, exist_ok=True)
     work_dir = os.path.join(output_dir, ".work")
     os.makedirs(work_dir, exist_ok=True)
@@ -539,32 +574,75 @@ def process_videos(
             if video_chapters:
                 print(f"  📑 Found {len(video_chapters)} chapters", flush=True)
 
-        # Download transcript
-        vtt_path = download_transcript(vid, work_dir, lang)
+        # Download transcripts (single or multi-language)
+        if multi_lang:
+            lang_results = download_transcripts_multi(vid, work_dir, langs)
+            # Filter to languages that succeeded
+            available = {l: p for l, p in lang_results.items() if p is not None}
+            if not available:
+                print(f"  ⚠ No transcript available in any requested language", flush=True)
+                results["no_subs"].append({"id": vid, "title": meta["title"], "languages_tried": langs})
+                continue
+        else:
+            vtt_path = download_transcript(vid, work_dir, langs[0])
+            if vtt_path is None:
+                print(f"  ⚠ No transcript available", flush=True)
+                results["no_subs"].append({"id": vid, "title": meta["title"]})
+                continue
+            available = {langs[0]: vtt_path}
 
-        if vtt_path is None:
-            print(f"  ⚠ No transcript available", flush=True)
-            results["no_subs"].append({"id": vid, "title": meta["title"]})
-            continue
+        # Process each available language
+        video_total_words = 0
+        lang_transcripts = {}  # For multi-lang JSON
 
-        # Clean the VTT file (pass chapters if found, otherwise None for flat output)
-        try:
-            transcript = clean_vtt(
-                vtt_path, keep_timestamps,
-                chapters=video_chapters if video_chapters else None,
-                video_id=vid,
-                fmt=fmt
-            )
-            word_count = len(transcript.split())
-            print(f"  ✓ Extracted {word_count:,} words", flush=True)
-        except Exception as e:
-            print(f"  ✗ Failed to clean transcript: {e}", flush=True)
-            results["failed"].append({"id": vid, "title": meta["title"], "error": str(e)})
-            continue
-        
-        # Format and store output
-        if fmt in ("json", "csv"):
-            # Structured formats: collect records, write at the end
+        for lang_code, vtt_path in available.items():
+            lang_label = f" [{lang_code}]" if multi_lang else ""
+
+            # Clean the VTT file
+            try:
+                transcript = clean_vtt(
+                    vtt_path, keep_timestamps,
+                    chapters=video_chapters if video_chapters else None,
+                    video_id=vid,
+                    fmt=fmt
+                )
+                word_count = len(transcript.split())
+                video_total_words += word_count
+                print(f"  ✓{lang_label} Extracted {word_count:,} words", flush=True)
+            except Exception as e:
+                print(f"  ✗{lang_label} Failed to clean transcript: {e}", flush=True)
+                results["failed"].append({"id": vid, "title": meta["title"], "lang": lang_code, "error": str(e)})
+                continue
+
+            # Format and store output
+            if fmt in ("json", "csv"):
+                # For multi-lang, collect per-language transcripts
+                lang_entry = {"transcript": transcript, "word_count": word_count}
+                if fmt == "json" and keep_timestamps:
+                    lang_entry["segments"] = structured_transcript(
+                        vtt_path, vid,
+                        chapters=video_chapters if video_chapters else None
+                    )
+                lang_transcripts[lang_code] = lang_entry
+            else:
+                formatted = format_output(vid, meta, transcript, fmt)
+
+                if merge:
+                    if multi_lang:
+                        # Prefix with language label in merged output
+                        formatted = f"**Language: {lang_code}**\n\n{formatted}"
+                    merged_content.append(formatted)
+                else:
+                    safe_title = sanitize_filename(meta["title"])
+                    suffix = f"_{lang_code}" if multi_lang else ""
+                    ext = fmt
+                    filepath = os.path.join(output_dir, f"{safe_title}{suffix}.{ext}")
+                    with open(filepath, "w", encoding="utf-8") as f:
+                        f.write(formatted)
+                    results["output_files"].append(filepath)
+
+        # Build structured record for JSON/CSV
+        if fmt in ("json", "csv") and lang_transcripts:
             record = {
                 "id": vid,
                 "title": meta["title"],
@@ -577,41 +655,39 @@ def process_videos(
                 "likes": meta.get("like_count"),
                 "thumbnail": meta.get("thumbnail", ""),
                 "tags": meta.get("tags", []),
-                "word_count": word_count,
                 "chapters": len(video_chapters),
-                "transcript": transcript
             }
             if meta.get("description"):
                 record["description"] = meta["description"]
-            # For JSON with timestamps: include structured entries with clickable URLs
-            if fmt == "json" and keep_timestamps:
-                record["segments"] = structured_transcript(
-                    vtt_path, vid,
-                    chapters=video_chapters if video_chapters else None
-                )
-            structured_records.append(record)
-        else:
-            formatted = format_output(vid, meta, transcript, fmt)
 
-            if merge:
-                merged_content.append(formatted)
+            if multi_lang:
+                # Multi-language: transcripts keyed by language code
+                record["languages"] = list(lang_transcripts.keys())
+                record["transcripts"] = {}
+                total_words = 0
+                for lc, entry in lang_transcripts.items():
+                    record["transcripts"][lc] = entry
+                    total_words += entry["word_count"]
+                record["word_count"] = total_words
             else:
-                # Save individual file
-                safe_title = sanitize_filename(meta["title"])
-                ext = fmt
-                filepath = os.path.join(output_dir, f"{safe_title}.{ext}")
-                with open(filepath, "w", encoding="utf-8") as f:
-                    f.write(formatted)
-                results["output_files"].append(filepath)
-        
+                # Single language: flat transcript (existing behavior)
+                single = list(lang_transcripts.values())[0]
+                record["word_count"] = single["word_count"]
+                record["transcript"] = single["transcript"]
+                if "segments" in single:
+                    record["segments"] = single["segments"]
+
+            structured_records.append(record)
+
         results["success"].append({
             "id": vid,
             "title": meta["title"],
-            "words": word_count,
+            "words": video_total_words,
             "duration": meta["duration"],
-            "chapters": len(video_chapters)
+            "chapters": len(video_chapters),
+            "languages": list(available.keys())
         })
-        
+
         # Delay between videos to avoid YouTube rate limits
         if i < len(video_ids):
             time.sleep(BATCH_DELAY_SECONDS)
@@ -704,7 +780,8 @@ def main():
     parser.add_argument("--merge", type=lambda x: x.lower() == "true", default=False, help="Merge into single file")
     parser.add_argument("--output-dir", default="./ytscribe_output", help="Output directory")
     parser.add_argument("--timestamps", type=lambda x: x.lower() == "true", default=False, help="Keep timestamps")
-    parser.add_argument("--lang", default="en", help="Subtitle language code")
+    parser.add_argument("--lang", default="en",
+                        help="Subtitle language code(s), comma-separated for multi-language (e.g. en,fr,es)")
     parser.add_argument("--chapters", type=lambda x: x.lower() == "true", default=True,
                         help="Detect and use YouTube chapters (default: true)")
 
@@ -720,13 +797,18 @@ def main():
         print(f"Warning: {len(video_ids)} videos requested. Processing first 50.", file=sys.stderr)
         video_ids = video_ids[:50]
     
+    # Parse language codes (comma-separated)
+    lang_list = [l.strip() for l in args.lang.split(",") if l.strip()]
+    if not lang_list:
+        lang_list = ["en"]
+
     results = process_videos(
         video_ids=video_ids,
         output_dir=args.output_dir,
         fmt=args.format,
         merge=args.merge,
         keep_timestamps=args.timestamps,
-        lang=args.lang,
+        langs=lang_list,
         chapters=args.chapters
     )
     

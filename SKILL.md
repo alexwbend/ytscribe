@@ -131,6 +131,7 @@ After delivering, add one line:
 | File format | Markdown (.md) | "text file", "plain text", ".txt", "raw text", "JSON", "CSV", "as JSON", "as CSV" |
 | Structure | Individual files | "merged", "one file", "combine all" |
 | Language | Video's own language | "in English", "in French", "Spanish subtitles", any language name or code |
+| Multi-language | OFF (single language) | "in English and French", "in en,fr,es", "both English and Spanish" |
 | Chapters | ON (auto-detected) | "no chapters", "flat", "without chapters" to disable |
 | Zip | Auto if 6+ individual files | User never needs to request this |
 
@@ -293,7 +294,7 @@ python3 "$SCRIPT" \
   --merge {true|false} \
   --output-dir ./ytscribe_output \
   --timestamps {true|false} \
-  --lang {language_code} \
+  --lang {language_code or comma-separated codes} \
   --chapters {true|false}
 ```
 
@@ -352,10 +353,35 @@ Some videos have no subtitles (music videos, very old videos, live streams).
 
 ## Language support
 
-Default to the video's own language — do not force English. If the user requests a specific language:
-- Use `--sub-lang {code}` (e.g., `en`, `fr`, `es`, `de`, `ar`)
+Default to the video's own language -- do not force English. If the user requests a specific language:
+- Use `--lang {code}` (e.g., `en`, `fr`, `es`, `de`, `ar`)
 - If the requested language is unavailable, fall back to the video's original language
 - Mention in the output which language was actually used if it differs from what was requested
+
+### Multi-language batch
+
+Pull transcripts in multiple languages for the same video in one request. Pass comma-separated
+language codes: `--lang en,fr,es`.
+
+For md/txt output, each language produces its own file with a language suffix:
+`Video_Title_en.md`, `Video_Title_fr.md`, etc.
+
+For JSON output, all languages are grouped under a `transcripts` key:
+```json
+{
+  "id": "abc123",
+  "title": "...",
+  "languages": ["en", "fr"],
+  "transcripts": {
+    "en": {"transcript": "...", "word_count": 1234},
+    "fr": {"transcript": "...", "word_count": 1100}
+  }
+}
+```
+
+If a requested language is not available for a given video, it is skipped gracefully.
+The output reports which languages succeeded and which were unavailable. A video is only
+marked as "no subs" if none of the requested languages are available.
 
 ---
 
