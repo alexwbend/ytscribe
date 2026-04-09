@@ -31,7 +31,7 @@ MAX_RETRIES = 3
 def run_ytdlp(args: list[str], capture_output=True) -> subprocess.CompletedProcess:
     """Run yt-dlp with standard flags."""
     cmd = ["yt-dlp", "--no-check-certificates", "--no-warnings"] + args
-    return subprocess.run(cmd, capture_output=capture_output, text=True, timeout=60)
+    return subprocess.run(cmd, capture_output=capture_output, text=True, timeout=120)
 
 
 def parse_chapters_from_description(description: str, video_duration: int = 0) -> list[dict]:
@@ -90,15 +90,8 @@ def get_video_metadata(video_id: str, fetch_description: bool = False) -> dict:
     If fetch_description is True, also fetches the video description
     (needed for chapter parsing).
     """
-    # Use JSON dump for reliable parsing -- avoids delimiter issues with
+    # Use --dump-json for reliable parsing -- avoids delimiter issues with
     # fields like description that can contain arbitrary text.
-    json_fields = [
-        "title", "channel", "duration", "upload_date",
-        "view_count", "like_count", "thumbnail", "tags"
-    ]
-    if fetch_description:
-        json_fields.append("description")
-
     for attempt in range(1, MAX_RETRIES + 1):
         result = run_ytdlp([
             "--skip-download",
@@ -606,7 +599,9 @@ def process_videos(
                     video_id=vid,
                     fmt=fmt
                 )
-                word_count = len(transcript.split())
+                # Strip chapter markers before counting words so they don't inflate the count
+                count_text = re.sub(r"^__CHAPTER__:.+$", "", transcript, flags=re.MULTILINE)
+                word_count = len(count_text.split())
                 video_total_words += word_count
                 print(f"  ✓{lang_label} Extracted {word_count:,} words", flush=True)
             except Exception as e:
