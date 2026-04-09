@@ -229,7 +229,13 @@ def _vtt_timestamp_to_seconds(ts: str) -> int:
     return 0
 
 
-def clean_vtt(vtt_path: str, keep_timestamps: bool = False, chapters: list[dict] | None = None) -> str:
+def clean_vtt(
+    vtt_path: str,
+    keep_timestamps: bool = False,
+    chapters: list[dict] | None = None,
+    video_id: str | None = None,
+    fmt: str = "md"
+) -> str:
     """Clean VTT subtitle file to plain text.
 
     YouTube auto-generated VTT files have duplicate lines because captions
@@ -238,6 +244,10 @@ def clean_vtt(vtt_path: str, keep_timestamps: bool = False, chapters: list[dict]
 
     If chapters are provided, the transcript is split into sections with
     chapter headings inserted at the appropriate positions.
+
+    If keep_timestamps is True and fmt is "md" and video_id is provided,
+    timestamps become clickable YouTube links that open the video at that
+    exact moment.
     """
     with open(vtt_path, "r", encoding="utf-8") as f:
         content = f.read()
@@ -277,10 +287,19 @@ def clean_vtt(vtt_path: str, keep_timestamps: bool = False, chapters: list[dict]
             seconds = _vtt_timestamp_to_seconds(current_raw_ts) if current_raw_ts else 0
             entries.append((seconds, current_display_ts, clean))
 
+    # Helper: format a single timestamped line
+    link_timestamps = keep_timestamps and fmt == "md" and video_id
+    def _ts_line(seconds: int, display_ts: str, text: str) -> str:
+        if link_timestamps:
+            url = f"https://youtube.com/watch?v={video_id}&t={seconds}"
+            return f"[{display_ts}]({url}) {text}"
+        else:
+            return f"[{display_ts}] {text}"
+
     # If no chapters, produce flat output (v1 behavior)
     if not chapters:
         if keep_timestamps:
-            return "\n".join(f"[{ts}] {text}" for _, ts, text in entries)
+            return "\n".join(_ts_line(s, ts, text) for s, ts, text in entries)
         else:
             return " ".join(text for _, _, text in entries)
 
@@ -309,7 +328,7 @@ def clean_vtt(vtt_path: str, keep_timestamps: bool = False, chapters: list[dict]
             continue
 
         if keep_timestamps:
-            body = "\n".join(f"[{ts}] {text}" for _, ts, text in bucket)
+            body = "\n".join(_ts_line(s, ts, text) for s, ts, text in bucket)
         else:
             body = " ".join(text for _, _, text in bucket)
 
@@ -487,7 +506,9 @@ def process_videos(
         try:
             transcript = clean_vtt(
                 vtt_path, keep_timestamps,
-                chapters=video_chapters if video_chapters else None
+                chapters=video_chapters if video_chapters else None,
+                video_id=vid,
+                fmt=fmt
             )
             word_count = len(transcript.split())
             print(f"  ✓ Extracted {word_count:,} words", flush=True)

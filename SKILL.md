@@ -186,11 +186,21 @@ Metadata fields like thumbnail, tags, and description only appear when available
 counts show "N/A" if YouTube does not return them (rare, but possible for some private or
 restricted videos).
 
-**Timestamped format (either md or txt):**
+**Timestamped format (markdown -- clickable links):**
 ```
-[00:00] First line of speech
-[00:15] Second line of speech
-[00:32] Third line of speech
+[0:00](https://youtube.com/watch?v=ID&t=0) First line of speech
+[0:15](https://youtube.com/watch?v=ID&t=15) Second line of speech
+[0:32](https://youtube.com/watch?v=ID&t=32) Third line of speech
+```
+
+In markdown output, each timestamp is a clickable link that opens the video at that exact moment.
+In plain text output, timestamps remain plain brackets since links are not supported.
+
+**Timestamped format (plain text):**
+```
+[0:00] First line of speech
+[0:15] Second line of speech
+[0:32] Third line of speech
 ```
 
 **Clean prose format (default):**
