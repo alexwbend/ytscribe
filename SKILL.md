@@ -128,7 +128,7 @@ After delivering, add one line:
 | Setting | Default | Override trigger (user says...) |
 |---------|---------|-------------------------------|
 | Timestamps | OFF (clean prose) | "with timestamps", "timestamped", "I need to reference parts" |
-| File format | Markdown (.md) | "text file", "plain text", ".txt", "raw text" |
+| File format | Markdown (.md) | "text file", "plain text", ".txt", "raw text", "JSON", "CSV", "as JSON", "as CSV" |
 | Structure | Individual files | "merged", "one file", "combine all" |
 | Language | Video's own language | "in English", "in French", "Spanish subtitles", any language name or code |
 | Chapters | ON (auto-detected) | "no chapters", "flat", "without chapters" to disable |
@@ -244,6 +244,35 @@ from 0:00 to display them, and the skill uses the same rule.
 
 To disable chapters for a specific request, the user can say "no chapters", "flat", or "without chapters".
 
+**JSON format:**
+
+JSON export produces structured data with all metadata fields and the full transcript. For a single
+video, the output is one JSON object. For a batch, it is an array of objects.
+
+```json
+{
+  "id": "dQw4w9WgXcQ",
+  "title": "Never Gonna Give You Up",
+  "channel": "Rick Astley",
+  "duration": 213,
+  "duration_formatted": "3m 33s",
+  "date": "2009-10-25",
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "views": 1760637282,
+  "likes": 18924025,
+  "thumbnail": "https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg",
+  "tags": ["rick astley", "never gonna give you up"],
+  "word_count": 176,
+  "chapters": 0,
+  "transcript": "We're no strangers to love..."
+}
+```
+
+**CSV format:**
+
+CSV export produces one row per video with columns for all metadata fields plus the transcript.
+Opens directly in Excel or Google Sheets. Tags are flattened to a comma-separated string.
+
 ---
 
 ## Execution
@@ -260,7 +289,7 @@ Locate and run the Python helper script. Search for it in the workspace:
 SCRIPT=$(find / -name "ytscribe.py" -path "*/scripts/*" 2>/dev/null | head -1)
 python3 "$SCRIPT" \
   --videos "VIDEO_ID_1,VIDEO_ID_2,..." \
-  --format {txt|md} \
+  --format {txt|md|json|csv} \
   --merge {true|false} \
   --output-dir ./ytscribe_output \
   --timestamps {true|false} \

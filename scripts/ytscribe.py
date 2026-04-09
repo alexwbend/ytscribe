@@ -9,6 +9,7 @@ Usage:
 """
 
 import argparse
+import csv
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import sys
 import time
 import zipfile
 from datetime import timedelta
+from io import StringIO
 from pathlib import Path
 
 # Delay between requests to avoid YouTube 429 rate limits.
@@ -229,6 +231,84 @@ def _vtt_timestamp_to_seconds(ts: str) -> int:
     return 0
 
 
+def _parse_vtt_entries(vtt_path: str) -> list[tuple[int, str, str]]:
+    """Parse a VTT file into deduplicated (seconds, display_timestamp, text) tuples.
+
+    Shared by clean_vtt (for text output) and structured_transcript (for JSON).
+    """
+    with open(vtt_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    lines = content.split("\n")
+    entries = []
+    seen = set()
+    current_raw_ts = None
+    current_display_ts = None
+
+    for line in lines:
+        if line.startswith("WEBVTT") or line.startswith("Kind:") or line.startswith("Language:"):
+            continue
+
+        ts_match = re.match(r"^(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->", line)
+        if ts_match:
+            current_raw_ts = ts_match.group(1)
+            ts = current_raw_ts.split(".")[0]
+            if ts.startswith("00:"):
+                ts = ts[3:]
+            current_display_ts = ts
+            continue
+
+        if not line.strip():
+            continue
+
+        clean = re.sub(r"<[^>]+>", "", line).strip()
+
+        if clean and clean not in seen:
+            seen.add(clean)
+            seconds = _vtt_timestamp_to_seconds(current_raw_ts) if current_raw_ts else 0
+            entries.append((seconds, current_display_ts, clean))
+
+    return entries
+
+
+def structured_transcript(vtt_path: str, video_id: str, chapters: list[dict] | None = None) -> list[dict]:
+    """Return transcript as a list of structured entries for JSON export.
+
+    Each entry: {"time": "12:34", "seconds": 754, "url": "https://...", "text": "..."}
+    If chapters are present, entries also include a "chapter" field.
+    """
+    entries = _parse_vtt_entries(vtt_path)
+
+    # Build chapter lookup if available
+    boundaries = [(ch["time_seconds"], ch["title"]) for ch in chapters] if chapters else []
+
+    def _get_chapter(seconds: int) -> str | None:
+        if not boundaries:
+            return None
+        chapter_title = boundaries[0][1]
+        for boundary_sec, title in boundaries:
+            if seconds >= boundary_sec:
+                chapter_title = title
+            else:
+                break
+        return chapter_title
+
+    result = []
+    for seconds, display_ts, text in entries:
+        entry = {
+            "time": display_ts,
+            "seconds": seconds,
+            "url": f"https://youtube.com/watch?v={video_id}&t={seconds}",
+            "text": text
+        }
+        chapter = _get_chapter(seconds)
+        if chapter:
+            entry["chapter"] = chapter
+        result.append(entry)
+
+    return result
+
+
 def clean_vtt(
     vtt_path: str,
     keep_timestamps: bool = False,
@@ -249,43 +329,7 @@ def clean_vtt(
     timestamps become clickable YouTube links that open the video at that
     exact moment.
     """
-    with open(vtt_path, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    lines = content.split("\n")
-    # First pass: extract (seconds, display_timestamp, text) tuples
-    entries = []
-    seen = set()
-    current_raw_ts = None  # full VTT timestamp for seconds conversion
-    current_display_ts = None  # simplified display timestamp
-
-    for line in lines:
-        # Skip VTT header and metadata
-        if line.startswith("WEBVTT") or line.startswith("Kind:") or line.startswith("Language:"):
-            continue
-
-        # Capture timestamp
-        ts_match = re.match(r"^(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->", line)
-        if ts_match:
-            current_raw_ts = ts_match.group(1)
-            # Simplify timestamp: remove hours if 00, remove milliseconds
-            ts = current_raw_ts.split(".")[0]
-            if ts.startswith("00:"):
-                ts = ts[3:]
-            current_display_ts = ts
-            continue
-
-        # Skip empty lines
-        if not line.strip():
-            continue
-
-        # Strip HTML tags (YouTube uses <c> tags for word-level timing)
-        clean = re.sub(r"<[^>]+>", "", line).strip()
-
-        if clean and clean not in seen:
-            seen.add(clean)
-            seconds = _vtt_timestamp_to_seconds(current_raw_ts) if current_raw_ts else 0
-            entries.append((seconds, current_display_ts, clean))
+    entries = _parse_vtt_entries(vtt_path)
 
     # Helper: format a single timestamped line
     link_timestamps = keep_timestamps and fmt == "md" and video_id
@@ -473,6 +517,7 @@ def process_videos(
     }
 
     merged_content = []
+    structured_records = []  # For JSON/CSV export
 
     for i, vid in enumerate(video_ids, 1):
         vid = vid.strip()
@@ -517,19 +562,47 @@ def process_videos(
             results["failed"].append({"id": vid, "title": meta["title"], "error": str(e)})
             continue
         
-        # Format output
-        formatted = format_output(vid, meta, transcript, fmt)
-        
-        if merge:
-            merged_content.append(formatted)
+        # Format and store output
+        if fmt in ("json", "csv"):
+            # Structured formats: collect records, write at the end
+            record = {
+                "id": vid,
+                "title": meta["title"],
+                "channel": meta["channel"],
+                "duration": meta["duration"],
+                "duration_formatted": format_duration(meta["duration"]),
+                "date": meta["date"],
+                "url": f"https://www.youtube.com/watch?v={vid}",
+                "views": meta.get("view_count"),
+                "likes": meta.get("like_count"),
+                "thumbnail": meta.get("thumbnail", ""),
+                "tags": meta.get("tags", []),
+                "word_count": word_count,
+                "chapters": len(video_chapters),
+                "transcript": transcript
+            }
+            if meta.get("description"):
+                record["description"] = meta["description"]
+            # For JSON with timestamps: include structured entries with clickable URLs
+            if fmt == "json" and keep_timestamps:
+                record["segments"] = structured_transcript(
+                    vtt_path, vid,
+                    chapters=video_chapters if video_chapters else None
+                )
+            structured_records.append(record)
         else:
-            # Save individual file
-            safe_title = sanitize_filename(meta["title"])
-            ext = fmt
-            filepath = os.path.join(output_dir, f"{safe_title}.{ext}")
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(formatted)
-            results["output_files"].append(filepath)
+            formatted = format_output(vid, meta, transcript, fmt)
+
+            if merge:
+                merged_content.append(formatted)
+            else:
+                # Save individual file
+                safe_title = sanitize_filename(meta["title"])
+                ext = fmt
+                filepath = os.path.join(output_dir, f"{safe_title}.{ext}")
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(formatted)
+                results["output_files"].append(filepath)
         
         results["success"].append({
             "id": vid,
@@ -559,6 +632,38 @@ def process_videos(
             f.write(merged_text)
         results["output_files"].append(filepath)
     
+    # Write structured export (JSON or CSV)
+    if fmt in ("json", "csv") and structured_records:
+        if len(structured_records) == 1:
+            filename = sanitize_filename(structured_records[0]["title"])
+        else:
+            filename = f"ytscribe_batch_{len(structured_records)}_videos"
+
+        if fmt == "json":
+            filepath = os.path.join(output_dir, f"{filename}.json")
+            # For single video, output the object directly; for batch, output an array
+            json_data = structured_records[0] if len(structured_records) == 1 else structured_records
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(json_data, f, indent=2, ensure_ascii=False, default=str)
+            results["output_files"].append(filepath)
+
+        elif fmt == "csv":
+            filepath = os.path.join(output_dir, f"{filename}.csv")
+            csv_columns = [
+                "id", "title", "channel", "duration", "duration_formatted",
+                "date", "url", "views", "likes", "thumbnail", "tags",
+                "word_count", "chapters", "transcript"
+            ]
+            with open(filepath, "w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=csv_columns, extrasaction="ignore")
+                writer.writeheader()
+                for record in structured_records:
+                    row = dict(record)
+                    # Flatten tags list to comma-separated string for CSV
+                    row["tags"] = ", ".join(row.get("tags", []))
+                    writer.writerow(row)
+            results["output_files"].append(filepath)
+
     # Auto-zip if 6+ individual files
     if not merge and len(results["output_files"]) >= 6:
         from datetime import datetime
@@ -595,7 +700,7 @@ def process_videos(
 def main():
     parser = argparse.ArgumentParser(description="ytscribe — YouTube Transcript Extractor")
     parser.add_argument("--videos", required=True, help="Comma-separated video IDs")
-    parser.add_argument("--format", choices=["txt", "md"], default="md", help="Output format")
+    parser.add_argument("--format", choices=["txt", "md", "json", "csv"], default="md", help="Output format")
     parser.add_argument("--merge", type=lambda x: x.lower() == "true", default=False, help="Merge into single file")
     parser.add_argument("--output-dir", default="./ytscribe_output", help="Output directory")
     parser.add_argument("--timestamps", type=lambda x: x.lower() == "true", default=False, help="Keep timestamps")
