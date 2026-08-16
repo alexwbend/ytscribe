@@ -158,16 +158,42 @@ def format_duration(seconds: int) -> str:
     return f"{secs}s"
 
 
-def download_transcript(video_id: str, work_dir: str, lang: str = "en") -> str | None:
+# Provenance of a caption track. Manual tracks are human-authored: punctuated,
+# capitalized, usually accurate on proper nouns. Auto tracks are YouTube ASR:
+# no punctuation, no casing, and shaky on names and jargon. Downstream
+# consumers almost always need to treat the two differently, so ytscribe
+# reports which one it got instead of leaving them indistinguishable.
+SOURCE_MANUAL = "manual"
+SOURCE_AUTO = "auto"
+
+
+def _find_vtt(work_dir: str, video_id: str) -> str | None:
+    """Return the path to a VTT file for this video, or None.
+
+    Scans the directory rather than probing one exact filename: yt-dlp
+    resolves `--sub-lang en` against whatever the video actually offers, so
+    the track can land as `{id}.en.vtt`, `{id}.en-US.vtt`, `{id}.en-GB.vtt`
+    and so on. Probing only `{id}.{lang}.vtt` misses those variants.
+    """
+    for name in sorted(os.listdir(work_dir)):
+        if name.startswith(video_id) and name.endswith(".vtt"):
+            return os.path.join(work_dir, name)
+    return None
+
+
+def download_transcript(video_id: str, work_dir: str, lang: str = "en") -> tuple[str, str] | None:
     """Download transcript VTT file with retry logic for 429 rate limits.
-    
-    Returns path to VTT file or None.
+
+    Returns (path_to_vtt, source) or None, where source is SOURCE_MANUAL or
+    SOURCE_AUTO. Attribution is exact: each flag is followed by a scan, and
+    the function returns as soon as one produces a file, so whichever flag
+    just ran is the one that produced it.
     """
     output_template = os.path.join(work_dir, f"{video_id}")
-    
+
     for attempt in range(1, MAX_RETRIES + 1):
         # Try manual subs first, then auto-generated
-        for sub_flag in ["--write-sub", "--write-auto-sub"]:
+        for sub_flag, source in (("--write-sub", SOURCE_MANUAL), ("--write-auto-sub", SOURCE_AUTO)):
             result = run_ytdlp([
                 sub_flag,
                 "--sub-lang", lang,
@@ -176,12 +202,12 @@ def download_transcript(video_id: str, work_dir: str, lang: str = "en") -> str |
                 "-o", output_template,
                 f"https://www.youtube.com/watch?v={video_id}"
             ])
-            
+
             # Check if VTT file was created
-            vtt_path = f"{output_template}.{lang}.vtt"
-            if os.path.exists(vtt_path):
-                return vtt_path
-        
+            vtt_path = _find_vtt(work_dir, video_id)
+            if vtt_path:
+                return vtt_path, source
+
         # Try without language specification (get whatever is available)
         result = run_ytdlp([
             "--write-auto-sub",
@@ -189,11 +215,13 @@ def download_transcript(video_id: str, work_dir: str, lang: str = "en") -> str |
             "-o", output_template,
             f"https://www.youtube.com/watch?v={video_id}"
         ])
-        
-        # Look for any VTT file
-        for f in os.listdir(work_dir):
-            if f.startswith(video_id) and f.endswith(".vtt"):
-                return os.path.join(work_dir, f)
+
+        # Look for any VTT file. Only --write-auto-sub ran in this branch, and
+        # the scans above established that neither flag produced a file for the
+        # requested language, so anything here is auto-generated.
+        vtt_path = _find_vtt(work_dir, video_id)
+        if vtt_path:
+            return vtt_path, SOURCE_AUTO
         
         # Check if we got rate-limited (429)
         stderr = result.stderr or ""
@@ -214,11 +242,11 @@ def download_transcript(video_id: str, work_dir: str, lang: str = "en") -> str |
     return None
 
 
-def download_transcripts_multi(video_id: str, work_dir: str, langs: list[str]) -> dict[str, str | None]:
+def download_transcripts_multi(video_id: str, work_dir: str, langs: list[str]) -> dict[str, tuple[str, str] | None]:
     """Download transcripts in multiple languages for a single video.
 
-    Returns a dict mapping each requested language to its VTT path,
-    or None if that language was not available.
+    Returns a dict mapping each requested language to a (vtt_path, source)
+    tuple, or None if that language was not available.
 
     Edge case: if a language is unavailable, it is skipped gracefully.
     The caller decides what to do with the results.
@@ -228,10 +256,10 @@ def download_transcripts_multi(video_id: str, work_dir: str, langs: list[str]) -
         # Use a language-specific subdirectory to avoid filename collisions
         lang_dir = os.path.join(work_dir, f"{video_id}_{lang}")
         os.makedirs(lang_dir, exist_ok=True)
-        vtt_path = download_transcript(video_id, lang_dir, lang)
-        results[lang] = vtt_path
-        if vtt_path:
-            print(f"    ✓ [{lang}] downloaded", flush=True)
+        found = download_transcript(video_id, lang_dir, lang)
+        results[lang] = found
+        if found:
+            print(f"    ✓ [{lang}] downloaded ({found[1]})", flush=True)
         else:
             print(f"    ⚠ [{lang}] not available", flush=True)
         # Small delay between language downloads to be safe
@@ -576,18 +604,18 @@ def process_videos(
                 results["no_subs"].append({"id": vid, "title": meta["title"], "languages_tried": langs})
                 continue
         else:
-            vtt_path = download_transcript(vid, work_dir, langs[0])
-            if vtt_path is None:
+            found = download_transcript(vid, work_dir, langs[0])
+            if found is None:
                 print(f"  ⚠ No transcript available", flush=True)
                 results["no_subs"].append({"id": vid, "title": meta["title"]})
                 continue
-            available = {langs[0]: vtt_path}
+            available = {langs[0]: found}
 
         # Process each available language
         video_total_words = 0
         lang_transcripts = {}  # For multi-lang JSON
 
-        for lang_code, vtt_path in available.items():
+        for lang_code, (vtt_path, sub_source) in available.items():
             lang_label = f" [{lang_code}]" if multi_lang else ""
 
             # Clean the VTT file
@@ -613,7 +641,11 @@ def process_videos(
                 # For multi-lang, collect per-language transcripts
                 # Strip internal chapter markers from transcript text for structured exports
                 clean_transcript = re.sub(r"^__CHAPTER__:.+\n?\n?", "", transcript, flags=re.MULTILINE)
-                lang_entry = {"transcript": clean_transcript, "word_count": word_count}
+                lang_entry = {
+                    "transcript": clean_transcript,
+                    "word_count": word_count,
+                    "source": sub_source,
+                }
                 if fmt == "json" and keep_timestamps:
                     lang_entry["segments"] = structured_transcript(
                         vtt_path, vid,
@@ -670,6 +702,7 @@ def process_videos(
                 single = list(lang_transcripts.values())[0]
                 record["word_count"] = single["word_count"]
                 record["transcript"] = single["transcript"]
+                record["source"] = single["source"]
                 if "segments" in single:
                     record["segments"] = single["segments"]
 

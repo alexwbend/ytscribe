@@ -270,9 +270,17 @@ video, the output is one JSON object. For a batch, it is an array of objects.
   "tags": ["rick astley", "never gonna give you up"],
   "word_count": 176,
   "chapters": 0,
+  "source": "manual",
   "transcript": "We're no strangers to love..."
 }
 ```
+
+The `source` field records which caption track YouTube served: `"manual"` for a
+human-authored track, `"auto"` for YouTube's auto-generated ASR. Manual tracks
+are punctuated, capitalized and generally accurate on names; auto tracks have no
+punctuation or casing and are unreliable on proper nouns and jargon. Mention the
+source when it matters — if a user is about to quote from an `"auto"` transcript,
+or asks for clean prose, it is worth saying the text came from machine captions.
 
 **CSV format:**
 
@@ -425,8 +433,8 @@ For JSON output, all languages are grouped under a `transcripts` key:
   "title": "...",
   "languages": ["en", "fr"],
   "transcripts": {
-    "en": {"transcript": "...", "word_count": 1234},
-    "fr": {"transcript": "...", "word_count": 1100}
+    "en": {"transcript": "...", "word_count": 1234, "source": "manual"},
+    "fr": {"transcript": "...", "word_count": 1100, "source": "auto"}
   }
 }
 ```
