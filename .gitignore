@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 .work/
 *.vtt
+# ...except committed test fixtures, which this rule silently swallowed.
+!tests/fixtures/*.vtt
 
 # OS files
 .DS_Store

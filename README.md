@@ -99,7 +99,7 @@ Transcribe the last 7 videos from: https://youtube.com/@TED
 
 Timestamps in markdown output are clickable links that open the video at that exact moment. In plain text, they stay as plain brackets.
 
-JSON export produces one structured object per video (or an array for batches) with full metadata, word count, and transcript text. When timestamps are enabled, a `segments` array is included with per-line time, seconds, URL, and text. CSV produces one row per video that opens directly in Excel or Sheets.
+JSON export produces one structured object per video (or an array for batches) with full metadata, word count, and transcript text. A `source` field records whether YouTube served a human-authored caption track (`"manual"`) or auto-generated ASR (`"auto"`) — the two differ sharply in punctuation, casing and accuracy on proper nouns. When timestamps are enabled, a `segments` array is included with per-line time, seconds, URL, and text. CSV produces one row per video that opens directly in Excel or Sheets.
 
 Videos with YouTube chapters are automatically detected and split into labeled sections. Chapters are parsed from the video description using the same rules as YouTube (3+ timestamps starting at 0:00). To disable, say "no chapters" or "flat".
 
