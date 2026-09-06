@@ -156,6 +156,19 @@ Batch runs summarize results at the end:
 
 YouTube throttles subtitle requests after rapid successive downloads. ytscribe adds a 2-second delay between requests and retries automatically on 429 errors (5s → 10s → 15s).
 
+### When yt-dlp itself fails
+
+"No subtitles" is only ever reported when yt-dlp ran cleanly and YouTube has no caption track. Every other failure lands in `failed` with a `kind` and a `hint`:
+
+| Kind | Meaning | What to do |
+|---|---|---|
+| `extractor` | The installed yt-dlp is out of date and YouTube has broken it | `python3 -m pip install -U yt-dlp`, rerun |
+| `bot-check` | YouTube is challenging this IP ("Sign in to confirm you're not a bot") | Wait an hour or more; `--cookies-from-browser` if it persists |
+| `rate-limit` | 429 after the built-in retries | Wait a few minutes, smaller batch |
+| `unavailable` | Private, removed, or region-locked | Nothing to fetch |
+
+The first three affect every video in a batch, so ytscribe stops at that point instead of sending YouTube more requests that cannot succeed, lists the unattempted videos under `failed`, and sets `aborted` in the results. It also warns at startup when yt-dlp is more than 45 days old, and runs the yt-dlp installed for the current interpreter (`python -m yt_dlp`) rather than whatever `yt-dlp` happens to be first on PATH.
+
 ---
 
 ## For developers
@@ -198,7 +211,7 @@ pip install pytest
 python3 -m pytest tests/ -v
 ```
 
-84 unit tests cover chapter parsing, VTT deduplication, all output formats, config validation, and filename sanitization.
+117 unit tests cover chapter parsing, VTT deduplication, all output formats, config validation, filename sanitization, caption provenance, and yt-dlp failure classification. Python 3.9 or newer.
 
 ---
 

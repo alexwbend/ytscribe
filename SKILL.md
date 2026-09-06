@@ -18,11 +18,16 @@ playlists, and channel recent uploads. Outputs as inline text, individual files,
 
 ## Dependencies
 
-This skill requires `yt-dlp`. Install it before first use:
+This skill requires `yt-dlp`. Install or upgrade it at the start of every run, not just the first:
 
 ```bash
-pip install yt-dlp --break-system-packages -q
+python3 -m pip install -U yt-dlp --break-system-packages -q
 ```
+
+The `-U` matters. YouTube changes its player every few weeks and an old yt-dlp then fails with
+extractor errors. The script reports those as **failed** (with a hint), never as "no subtitles",
+and warns on stderr when the installed yt-dlp is more than 45 days old. Use `python3 -m pip` rather
+than bare `pip` so the upgrade lands in the same interpreter that runs the script.
 
 ## How it works
 
@@ -291,10 +296,12 @@ Opens directly in Excel or Google Sheets. Tags are flattened to a comma-separate
 
 ## Execution
 
-### Step 1: Install yt-dlp
+### Step 1: Install or upgrade yt-dlp
 ```bash
-pip install yt-dlp --break-system-packages -q 2>/dev/null
+python3 -m pip install -U yt-dlp --break-system-packages -q 2>/dev/null
 ```
+
+Always upgrade. A stale yt-dlp is the most common reason a batch comes back empty.
 
 ### Step 2: Download transcripts
 Locate and run the Python helper script. Search for it in the workspace:
@@ -405,11 +412,36 @@ For listing videos:
 
 ## Handling failures
 
-Some videos have no subtitles (music videos, very old videos, live streams).
+The `---JSON_RESULTS---` block separates three outcomes. Treat them differently; they are not
+interchangeable.
+
+**`no_subs`** — yt-dlp ran cleanly and YouTube has no caption track for this video (music videos,
+very old uploads, some live streams). This is final.
 - Log clearly: "⚠ No transcript available for: {title}"
 - Continue processing remaining videos
 - Summarize at the end: "Extracted {X}/{Y} transcripts. {Z} had no subtitles available."
-- Never stop the batch because one video failed.
+
+**`failed`** — yt-dlp could not do its job. Each entry carries a `kind`, an `error`, and a `hint`.
+Never describe a `failed` video as having no transcript; the transcript is probably there and
+something in between broke. Act on the kind:
+- `extractor` — the installed yt-dlp is out of date and YouTube has broken it. Run
+  `python3 -m pip install -U yt-dlp --break-system-packages -q` and rerun the same batch.
+  Do this without asking; it is the fix nine times out of ten.
+- `bot-check` — YouTube is challenging this IP address ("Sign in to confirm you're not a bot").
+  Do NOT retry in a loop; that makes the block last longer. Tell the user plainly, suggest trying
+  again in an hour or more, and mention that yt-dlp's `--cookies-from-browser` is the documented
+  workaround if it keeps happening.
+- `rate-limit` — retries with backoff already happened. Wait a few minutes, then rerun a smaller batch.
+- `unavailable` — the video is private, removed, or region-locked. Report it as such and move on.
+- `unknown` — show the user the `error` text and the hint.
+
+**`aborted`** — present when a `failed` kind was systemic (`extractor`, `bot-check`, `rate-limit`).
+The script stops the batch at that point rather than sending YouTube more requests that cannot
+succeed, and lists every unattempted video under `failed` with `error: "not attempted: ..."`. When
+you see `aborted`, fix the cause (usually the upgrade above), then rerun the whole batch. Say in the
+summary that the batch stopped early and why. Do not report unattempted videos as missing captions.
+
+A non-systemic failure (`unavailable`, `unknown`) never stops the batch.
 
 ## Language support
 

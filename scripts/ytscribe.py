@@ -8,6 +8,8 @@ Usage:
   python3 ytscribe.py --videos "dQw4w9WgXcQ" --format txt --timestamps true
 """
 
+from __future__ import annotations
+
 import argparse
 import csv
 import json
@@ -28,10 +30,149 @@ RETRY_DELAY_SECONDS = 5
 MAX_RETRIES = 3
 
 
+# --- yt-dlp invocation and failure classification ---------------------------
+
+# yt-dlp versions are release dates (YYYY.MM.DD). YouTube changes its player
+# often enough that a build more than a few weeks old tends to fail with
+# extractor errors, and before failure classification existed those errors
+# looked exactly like "this video has no captions".
+YTDLP_STALE_AFTER_DAYS = 45
+
+# Failure kinds. The "systemic" ones affect every video in the batch, so the
+# batch stops instead of sending YouTube dozens more requests that cannot
+# succeed (which is also how an IP gets bot-checked for longer).
+KIND_BOT_CHECK = "bot-check"
+KIND_RATE_LIMIT = "rate-limit"
+KIND_EXTRACTOR = "extractor"
+KIND_UNAVAILABLE = "unavailable"
+KIND_UNKNOWN = "unknown"
+SYSTEMIC_KINDS = {KIND_BOT_CHECK, KIND_RATE_LIMIT, KIND_EXTRACTOR}
+
+UPDATE_HINT = (
+    "Update yt-dlp: python3 -m pip install -U yt-dlp "
+    "(YouTube breaks old versions every few weeks)"
+)
+
+ERROR_HINTS = {
+    KIND_BOT_CHECK: (
+        "YouTube is bot-checking this IP address. Wait an hour or more and retry, "
+        "or pass cookies from a signed-in browser (yt-dlp --cookies-from-browser). "
+        "Do not retry in a loop; that extends the block."
+    ),
+    KIND_RATE_LIMIT: "Rate limited by YouTube. Wait a few minutes and retry with a smaller batch.",
+    KIND_EXTRACTOR: UPDATE_HINT,
+    KIND_UNAVAILABLE: "The video is private, removed, or region-locked. Nothing to fetch.",
+    KIND_UNKNOWN: (
+        "Unrecognised yt-dlp error. Rerun the yt-dlp command by hand to see the full "
+        "output. If it mentions extraction or the page, " + UPDATE_HINT
+    ),
+}
+
+
+class YtDlpError(Exception):
+    """yt-dlp failed for a reason other than "this video has no captions".
+
+    "No captions" is the one outcome a caller may treat as final. Everything
+    else (a bot check, a rate limit, a yt-dlp release YouTube has since
+    broken) is temporary or fixable and must be reported as a failure.
+    """
+
+    def __init__(self, kind: str, reason: str):
+        super().__init__(reason)
+        self.kind = kind
+        self.reason = reason
+        self.hint = ERROR_HINTS.get(kind, ERROR_HINTS[KIND_UNKNOWN])
+
+    @property
+    def systemic(self) -> bool:
+        return self.kind in SYSTEMIC_KINDS
+
+
+def classify_ytdlp_error(result) -> YtDlpError | None:
+    """Turn a failed yt-dlp run into a YtDlpError, or None if nothing went wrong.
+
+    Only ERROR lines and non-zero exit codes count. yt-dlp reports "no
+    subtitles for the requested languages" as a warning with exit code 0,
+    and run_ytdlp passes --no-warnings, so a clean run that produced no
+    file is a genuine absence of captions.
+    """
+    stderr = getattr(result, "stderr", "") or ""
+    stdout = getattr(result, "stdout", "") or ""
+    returncode = getattr(result, "returncode", 0)
+    combined = f"{stderr}\n{stdout}"
+    error_lines = [ln.strip() for ln in combined.splitlines() if ln.strip().startswith("ERROR")]
+    if not error_lines and returncode == 0:
+        return None
+
+    text = combined.lower()
+    first = error_lines[0] if error_lines else f"yt-dlp exited with code {returncode}"
+    # Drop the "ERROR: [youtube] <id>: " prefix so the reason reads cleanly.
+    reason = re.sub(r"^ERROR:\s*(\[[^\]]+\]\s*)?([A-Za-z0-9_-]{11}:\s*)?", "", first).strip() or first
+
+    if "sign in to confirm" in text or "not a bot" in text:
+        return YtDlpError(KIND_BOT_CHECK, reason)
+    if "429" in text or "too many requests" in text:
+        return YtDlpError(KIND_RATE_LIMIT, reason)
+    if any(marker in text for marker in (
+        "video unavailable", "private video", "video is private", "has been removed",
+        "this video is not available", "members-only", "age-restricted",
+        "unavailable in your country", "requires payment",
+    )):
+        return YtDlpError(KIND_UNAVAILABLE, reason)
+    if any(marker in text for marker in (
+        "needs to be reloaded", "unable to extract", "please report this issue",
+        "failed to parse", "unable to download webpage", "unable to download api page",
+        "unsupported url", "requested format is not available",
+    )):
+        return YtDlpError(KIND_EXTRACTOR, reason)
+    return YtDlpError(KIND_UNKNOWN, reason)
+
+
+def ytdlp_command() -> list[str]:
+    """The yt-dlp invocation to use.
+
+    Prefer the yt-dlp installed for the interpreter running this script, so
+    the copy that `python3 -m pip install -U yt-dlp` upgrades is the copy
+    that runs. Fall back to whatever `yt-dlp` is on PATH, which on a machine
+    with several Pythons can be an older build from another interpreter.
+    """
+    try:
+        import importlib.util
+        if importlib.util.find_spec("yt_dlp") is not None:
+            return [sys.executable, "-m", "yt_dlp"]
+    except (ImportError, ValueError):
+        pass
+    return ["yt-dlp"]
+
+
 def run_ytdlp(args: list[str], capture_output=True) -> subprocess.CompletedProcess:
     """Run yt-dlp with standard flags."""
-    cmd = ["yt-dlp", "--no-check-certificates", "--no-warnings"] + args
+    cmd = ytdlp_command() + ["--no-check-certificates", "--no-warnings"] + args
     return subprocess.run(cmd, capture_output=capture_output, text=True, timeout=120)
+
+
+def check_ytdlp_version(now: datetime | None = None) -> str | None:
+    """Warn on stderr if yt-dlp is missing or stale. Returns the version, or None if missing."""
+    try:
+        result = subprocess.run(
+            ytdlp_command() + ["--version"], capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        result = None
+    if result is None or result.returncode != 0:
+        print("✗ yt-dlp not found. Install it: python3 -m pip install -U yt-dlp",
+              file=sys.stderr, flush=True)
+        return None
+    lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
+    version = lines[-1] if lines else ""
+    match = re.match(r"(\d{4})\.(\d{2})\.(\d{2})", version)
+    if match:
+        released = datetime(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        age_days = ((now or datetime.now()) - released).days
+        if age_days > YTDLP_STALE_AFTER_DAYS:
+            print(f"⚠ yt-dlp {version} is {age_days} days old. {UPDATE_HINT}",
+                  file=sys.stderr, flush=True)
+    return version or None
 
 
 def parse_chapters_from_description(description: str) -> list[dict]:
@@ -134,7 +275,11 @@ def get_video_metadata(video_id: str, include_description: bool = False) -> dict
                 time.sleep(wait)
                 continue
 
-        # Non-429 failure — no point retrying
+        # Non-429 failure — no point retrying. Say why, so a broken yt-dlp is
+        # visible here and not only at the transcript step.
+        error = classify_ytdlp_error(result)
+        if error is not None:
+            print(f"  ⚠ Metadata fetch failed ({error.kind}): {error.reason}", flush=True)
         break
 
     return {
@@ -223,22 +368,23 @@ def download_transcript(video_id: str, work_dir: str, lang: str = "en") -> tuple
         if vtt_path:
             return vtt_path, SOURCE_AUTO
         
-        # Check if we got rate-limited (429)
-        stderr = result.stderr or ""
-        stdout = result.stdout or ""
-        if "429" in stderr or "429" in stdout or "Too Many Requests" in stderr or "Too Many Requests" in stdout:
+        error = classify_ytdlp_error(result)
+        if error is not None and error.kind == KIND_RATE_LIMIT:
             if attempt < MAX_RETRIES:
                 wait = RETRY_DELAY_SECONDS * attempt
                 print(f"  ⏳ Rate limited (429). Waiting {wait}s before retry {attempt + 1}/{MAX_RETRIES}...", flush=True)
                 time.sleep(wait)
                 continue
-            else:
-                print(f"  ✗ Rate limited after {MAX_RETRIES} retries", flush=True)
-                return None
-        
-        # If no 429, subtitles genuinely don't exist for this video
+            print(f"  ✗ Rate limited after {MAX_RETRIES} retries", flush=True)
+            raise error
+        if error is not None:
+            # A bot check, a broken extractor, an unavailable video: none of
+            # these mean "no captions", so never return None for them.
+            raise error
+
+        # A clean run that produced no file: this video genuinely has no captions.
         break
-    
+
     return None
 
 
@@ -595,21 +741,43 @@ def process_videos(
                 print(f"  📑 Found {len(video_chapters)} chapters", flush=True)
 
         # Download transcripts (single or multi-language)
-        if multi_lang:
-            lang_results = download_transcripts_multi(vid, work_dir, langs)
-            # Filter to languages that succeeded
-            available = {l: p for l, p in lang_results.items() if p is not None}
-            if not available:
-                print(f"  ⚠ No transcript available in any requested language", flush=True)
-                results["no_subs"].append({"id": vid, "title": meta["title"], "languages_tried": langs})
+        try:
+            if multi_lang:
+                lang_results = download_transcripts_multi(vid, work_dir, langs)
+                # Filter to languages that succeeded
+                available = {l: p for l, p in lang_results.items() if p is not None}
+                if not available:
+                    print(f"  ⚠ No transcript available in any requested language", flush=True)
+                    results["no_subs"].append({"id": vid, "title": meta["title"], "languages_tried": langs})
+                    continue
+            else:
+                found = download_transcript(vid, work_dir, langs[0])
+                if found is None:
+                    print(f"  ⚠ No transcript available", flush=True)
+                    results["no_subs"].append({"id": vid, "title": meta["title"]})
+                    continue
+                available = {langs[0]: found}
+        except YtDlpError as e:
+            print(f"  ✗ yt-dlp failed ({e.kind}): {e.reason}", flush=True)
+            results["failed"].append({
+                "id": vid, "title": meta["title"], "kind": e.kind, "error": e.reason, "hint": e.hint,
+            })
+            if not e.systemic:
                 continue
-        else:
-            found = download_transcript(vid, work_dir, langs[0])
-            if found is None:
-                print(f"  ⚠ No transcript available", flush=True)
-                results["no_subs"].append({"id": vid, "title": meta["title"]})
-                continue
-            available = {langs[0]: found}
+            # This failure hits every video, not just this one. Stop rather
+            # than send YouTube more requests that cannot succeed.
+            remaining = [v.strip() for v in video_ids[i:] if v.strip()]
+            if remaining:
+                print(f"  ⛔ Stopping the batch: {e.kind} affects every video. "
+                      f"{len(remaining)} not attempted.", flush=True)
+                for rv in remaining:
+                    results["failed"].append({
+                        "id": rv, "title": f"Video {rv}", "kind": e.kind,
+                        "error": f"not attempted: batch stopped on a systemic failure ({e.kind})",
+                        "hint": e.hint,
+                    })
+            results["aborted"] = {"kind": e.kind, "reason": e.reason, "hint": e.hint, "after": vid}
+            break
 
         # Process each available language
         video_total_words = 0
@@ -792,7 +960,16 @@ def process_videos(
         print(f"⚠ No subs:    {len(results['no_subs'])}/{total}")
     if results["failed"]:
         print(f"✗ Failed:     {len(results['failed'])}/{total}")
-    
+        hints = []
+        for entry in results["failed"]:
+            hint = entry.get("hint")
+            if hint and hint not in hints:
+                hints.append(hint)
+        for hint in hints:
+            print(f"   ↳ {hint}")
+    if results.get("aborted"):
+        print(f"⛔ Batch stopped early after {results['aborted']['after']} ({results['aborted']['kind']})")
+
     total_words = sum(r["words"] for r in results["success"])
     print(f"📝 Total words: {total_words:,}")
     print(f"📁 Output files: {len(results['output_files'])}")
@@ -923,6 +1100,9 @@ def main():
     lang_list = [l.strip() for l in args.lang.split(",") if l.strip()]
     if not lang_list:
         lang_list = ["en"]
+
+    if check_ytdlp_version() is None:
+        sys.exit(2)
 
     results = process_videos(
         video_ids=video_ids,
