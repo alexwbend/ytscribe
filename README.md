@@ -211,7 +211,7 @@ pip install pytest
 python3 -m pytest tests/ -v
 ```
 
-117 unit tests cover chapter parsing, VTT deduplication, all output formats, config validation, filename sanitization, caption provenance, and yt-dlp failure classification. Python 3.9 or newer.
+121 unit tests cover chapter parsing, VTT deduplication, all output formats, config validation, filename sanitization, caption provenance, and yt-dlp failure classification. Python 3.9 or newer.
 
 ---
 

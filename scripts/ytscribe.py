@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import html
 import json
 import os
 import re
@@ -455,7 +456,10 @@ def _parse_vtt_entries(vtt_path: str) -> list[tuple[int, str, str]]:
         if not line.strip():
             continue
 
-        clean = re.sub(r"<[^>]+>", "", line).strip()
+        # Strip cue tags first, then decode entities: YouTube caption text
+        # carries HTML entities (&gt;&gt; speaker-change markers, &amp;,
+        # &#39;), and a downstream consumer should never see them.
+        clean = html.unescape(re.sub(r"<[^>]+>", "", line)).strip()
 
         if clean and clean not in seen:
             seen.add(clean)
