@@ -100,7 +100,7 @@ After delivering, add one line:
 
 For playlists and channels, first fetch a preview (first 10 videos) and the total count:
 ```bash
-yt-dlp --no-check-certificates --flat-playlist \
+yt-dlp --flat-playlist \
   --print "%(id)s ||| %(title)s ||| %(duration)s ||| %(upload_date)s" \
   --playlist-end 10 --max-downloads 10 \
   "{URL}"
@@ -400,7 +400,6 @@ with automatic 2-second delays between videos and exponential backoff retries (5
 ## yt-dlp flags
 
 Always use:
-- `--no-check-certificates` — Required in sandbox environments
 - `--skip-download` — Never download the actual video
 - `--write-auto-sub` — Get auto-generated subs if manual ones aren't available
 - `--sub-lang en` — Default to English; adjust per user request
@@ -409,6 +408,14 @@ Always use:
 For listing videos:
 - `--flat-playlist` — Enumerate without processing
 - `--playlist-end N` — Limit enumeration
+
+TLS certificates stay verified. Do not add `--no-check-certificates` or set `YTSCRIBE_INSECURE_TLS`
+by default: everything fetched (metadata, caption text) arrives over that connection and ends up in
+the user's files. Some sandboxes route traffic through a proxy that re-signs TLS; there every call
+fails with `CERTIFICATE_VERIFY_FAILED`, which the script reports as kind `tls`. Only then, retry
+once with `YTSCRIBE_INSECURE_TLS=1` in front of the script (and `--no-check-certificates` on a
+direct yt-dlp call such as the playlist preview), and tell the user certificate checking was off
+for that run.
 
 ## Handling failures
 
@@ -432,13 +439,19 @@ something in between broke. Act on the kind:
   again in an hour or more, and mention that yt-dlp's `--cookies-from-browser` is the documented
   workaround if it keeps happening.
 - `rate-limit` — retries with backoff already happened. Wait a few minutes, then rerun a smaller batch.
-- `unavailable` — the video is private, removed, or region-locked. Report it as such and move on.
+- `tls` — TLS certificate verification failed. This is not an out-of-date yt-dlp; do NOT upgrade it.
+  In a sandbox whose egress proxy re-signs TLS, rerun the batch once with `YTSCRIBE_INSECURE_TLS=1`
+  and say in the summary that certificate checking was off. Anywhere else, report it and suggest
+  `python3 -m pip install -U certifi`; do not turn verification off.
+- `unavailable` — the video is private, removed, age-restricted, or region-locked. Report it as such
+  and move on. An age-gated video ("Sign in to confirm your age") never succeeds without a signed-in
+  session, so do not retry it and do not describe it as a bot check.
 - `unknown` — show the user the `error` text and the hint.
 
-**`aborted`** — present when a `failed` kind was systemic (`extractor`, `bot-check`, `rate-limit`).
+**`aborted`** — present when a `failed` kind was systemic (`extractor`, `bot-check`, `rate-limit`, `tls`).
 The script stops the batch at that point rather than sending YouTube more requests that cannot
 succeed, and lists every unattempted video under `failed` with `error: "not attempted: ..."`. When
-you see `aborted`, fix the cause (usually the upgrade above), then rerun the whole batch. Say in the
+you see `aborted`, fix the cause (for `extractor`, the upgrade above), then rerun the whole batch. Say in the
 summary that the batch stopped early and why. Do not report unattempted videos as missing captions.
 
 A non-systemic failure (`unavailable`, `unknown`) never stops the batch.

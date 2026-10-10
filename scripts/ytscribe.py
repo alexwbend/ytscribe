@@ -44,10 +44,22 @@ YTDLP_STALE_AFTER_DAYS = 45
 # succeed (which is also how an IP gets bot-checked for longer).
 KIND_BOT_CHECK = "bot-check"
 KIND_RATE_LIMIT = "rate-limit"
+KIND_TLS = "tls"
 KIND_EXTRACTOR = "extractor"
 KIND_UNAVAILABLE = "unavailable"
 KIND_UNKNOWN = "unknown"
-SYSTEMIC_KINDS = {KIND_BOT_CHECK, KIND_RATE_LIMIT, KIND_EXTRACTOR}
+SYSTEMIC_KINDS = {KIND_BOT_CHECK, KIND_RATE_LIMIT, KIND_TLS, KIND_EXTRACTOR}
+
+# yt-dlp verifies TLS certificates unless told not to, and so does ytscribe.
+# Probe JSON, caption text and the bot-check / rate-limit verdicts all arrive
+# over that connection, and callers store and publish what comes back, so an
+# unverified connection lets anyone on the network path write the transcript.
+# This variable is the one way to switch verification off, for environments
+# whose egress proxy re-signs TLS with a CA yt-dlp does not trust (some
+# sandboxes). run_ytdlp warns on stderr whenever it is in effect.
+INSECURE_TLS_ENV = "YTSCRIBE_INSECURE_TLS"
+_INSECURE_TLS_TRUTHY = {"1", "true", "yes", "on"}
+_insecure_tls_warned = False
 
 UPDATE_HINT = (
     "Update yt-dlp: python3 -m pip install -U yt-dlp "
@@ -61,8 +73,15 @@ ERROR_HINTS = {
         "Do not retry in a loop; that extends the block."
     ),
     KIND_RATE_LIMIT: "Rate limited by YouTube. Wait a few minutes and retry with a smaller batch.",
+    KIND_TLS: (
+        "TLS certificate verification failed, so yt-dlp refused the connection. "
+        "Refresh this machine's CA bundle (python3 -m pip install -U certifi), or trust the "
+        "CA of the proxy that intercepts TLS. Only as a last resort set "
+        f"{INSECURE_TLS_ENV}=1, which turns verification off and lets anyone on the "
+        "network alter what comes back."
+    ),
     KIND_EXTRACTOR: UPDATE_HINT,
-    KIND_UNAVAILABLE: "The video is private, removed, or region-locked. Nothing to fetch.",
+    KIND_UNAVAILABLE: "The video is private, removed, age-restricted, or region-locked. Nothing to fetch.",
     KIND_UNKNOWN: (
         "Unrecognised yt-dlp error. Rerun the yt-dlp command by hand to see the full "
         "output. If it mentions extraction or the page, " + UPDATE_HINT
@@ -89,6 +108,23 @@ class YtDlpError(Exception):
         return self.kind in SYSTEMIC_KINDS
 
 
+# Wording YouTube uses for an age-gated video, passed through by yt-dlp. It opens
+# with the same "Sign in to confirm" as a bot check, but without a signed-in
+# session it never succeeds, so it is unavailable (permanent), not a bot check
+# (temporary). Checked before the sign-in marker for exactly that reason.
+AGE_GATE_MARKERS = (
+    "confirm your age", "age-restricted", "age restricted",
+    "age-verification", "age verification", "inappropriate for some users",
+)
+
+# "HTTP Error 429", never a bare "429": video ids are 11 characters of
+# [A-Za-z0-9_-] and temp paths are arbitrary, so either can contain those digits.
+_HTTP_429 = re.compile(r"http\s?error\s+429\b")
+
+# Python's ssl module and yt-dlp's CertificateVerifyError both say this.
+TLS_MARKERS = ("certificate verify failed", "certificate_verify_failed", "certificateverifyerror")
+
+
 def classify_ytdlp_error(result) -> YtDlpError | None:
     """Turn a failed yt-dlp run into a YtDlpError, or None if nothing went wrong.
 
@@ -96,6 +132,13 @@ def classify_ytdlp_error(result) -> YtDlpError | None:
     subtitles for the requested languages" as a warning with exit code 0,
     and run_ytdlp passes --no-warnings, so a clean run that produced no
     file is a genuine absence of captions.
+
+    The kind comes from the first ERROR line alone. Everything else yt-dlp
+    prints (the "[youtube] <id>: Downloading webpage" progress lines, the URL,
+    paths, and with --dump-json whole titles and descriptions) is not about
+    why the run failed, and matching on it misfiled videos: an id containing
+    "429" read as a rate limit. Only when there is no ERROR line at all (a
+    crash, a signal) is the whole text all there is to go on.
     """
     stderr = getattr(result, "stderr", "") or ""
     stdout = getattr(result, "stdout", "") or ""
@@ -105,18 +148,22 @@ def classify_ytdlp_error(result) -> YtDlpError | None:
     if not error_lines and returncode == 0:
         return None
 
-    text = combined.lower()
+    text = (error_lines[0] if error_lines else combined).lower()
     first = error_lines[0] if error_lines else f"yt-dlp exited with code {returncode}"
     # Drop the "ERROR: [youtube] <id>: " prefix so the reason reads cleanly.
     reason = re.sub(r"^ERROR:\s*(\[[^\]]+\]\s*)?([A-Za-z0-9_-]{11}:\s*)?", "", first).strip() or first
 
+    if any(marker in text for marker in AGE_GATE_MARKERS):
+        return YtDlpError(KIND_UNAVAILABLE, reason)
     if "sign in to confirm" in text or "not a bot" in text:
         return YtDlpError(KIND_BOT_CHECK, reason)
-    if "429" in text or "too many requests" in text:
+    if _HTTP_429.search(text) or "too many requests" in text:
         return YtDlpError(KIND_RATE_LIMIT, reason)
+    if any(marker in text for marker in TLS_MARKERS):
+        return YtDlpError(KIND_TLS, reason)
     if any(marker in text for marker in (
         "video unavailable", "private video", "video is private", "has been removed",
-        "this video is not available", "members-only", "age-restricted",
+        "this video is not available", "members-only",
         "unavailable in your country", "requires payment",
     )):
         return YtDlpError(KIND_UNAVAILABLE, reason)
@@ -146,9 +193,37 @@ def ytdlp_command() -> list[str]:
     return ["yt-dlp"]
 
 
+def insecure_tls_enabled() -> bool:
+    """True only when the operator explicitly turned certificate checking off.
+
+    Read on every call, not at import, so it can be set after the module is
+    loaded. Anything other than 1/true/yes/on (including a typo) leaves
+    verification on.
+    """
+    return os.environ.get(INSECURE_TLS_ENV, "").strip().lower() in _INSECURE_TLS_TRUTHY
+
+
+def _warn_insecure_tls_once() -> None:
+    global _insecure_tls_warned
+    if _insecure_tls_warned:
+        return
+    _insecure_tls_warned = True
+    print(f"⚠ {INSECURE_TLS_ENV} is set: TLS certificate verification is OFF for yt-dlp, so "
+          "captions and metadata can be altered in transit. Unset it unless a "
+          "TLS-intercepting proxy leaves no other option.", file=sys.stderr, flush=True)
+
+
 def run_ytdlp(args: list[str], capture_output=True) -> subprocess.CompletedProcess:
-    """Run yt-dlp with standard flags."""
-    cmd = ytdlp_command() + ["--no-check-certificates", "--no-warnings"] + args
+    """Run yt-dlp with standard flags.
+
+    TLS certificates are verified unless YTSCRIBE_INSECURE_TLS=1 is set (see
+    INSECURE_TLS_ENV for why that exists and what it costs).
+    """
+    flags = ["--no-warnings"]
+    if insecure_tls_enabled():
+        _warn_insecure_tls_once()
+        flags.insert(0, "--no-check-certificates")
+    cmd = ytdlp_command() + flags + args
     return subprocess.run(cmd, capture_output=capture_output, text=True, timeout=120)
 
 
@@ -267,18 +342,19 @@ def get_video_metadata(video_id: str, include_description: bool = False) -> dict
             except (json.JSONDecodeError, KeyError):
                 pass  # fall through to retry logic
 
-        # Check for rate limiting
-        stderr = result.stderr or ""
-        if "429" in stderr or "Too Many Requests" in stderr:
-            if attempt < MAX_RETRIES:
-                wait = RETRY_DELAY_SECONDS * attempt
-                print(f"  ⏳ Metadata rate limited. Waiting {wait}s before retry {attempt + 1}/{MAX_RETRIES}...", flush=True)
-                time.sleep(wait)
-                continue
-
-        # Non-429 failure — no point retrying. Say why, so a broken yt-dlp is
-        # visible here and not only at the transcript step.
+        # Only a rate limit is worth waiting out. Ask the classifier instead of
+        # substring-matching stderr: a video id containing "429" is not a rate
+        # limit, and treating it as one just sleeps and re-requests.
         error = classify_ytdlp_error(result)
+        if error is not None and error.kind == KIND_RATE_LIMIT and attempt < MAX_RETRIES:
+            wait = RETRY_DELAY_SECONDS * attempt
+            print(f"  ⏳ Metadata rate limited. Waiting {wait}s before retry {attempt + 1}/{MAX_RETRIES}...", flush=True)
+            time.sleep(wait)
+            continue
+
+        # Any other failure, or the last rate-limited attempt — no point
+        # retrying. Say why, so a broken yt-dlp is visible here and not only
+        # at the transcript step.
         if error is not None:
             print(f"  ⚠ Metadata fetch failed ({error.kind}): {error.reason}", flush=True)
         break
