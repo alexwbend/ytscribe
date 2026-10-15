@@ -164,10 +164,19 @@ YouTube throttles subtitle requests after rapid successive downloads. ytscribe a
 |---|---|---|
 | `extractor` | The installed yt-dlp is out of date and YouTube has broken it | `python3 -m pip install -U yt-dlp`, rerun |
 | `bot-check` | YouTube is challenging this IP ("Sign in to confirm you're not a bot") | Wait an hour or more; `--cookies-from-browser` if it persists |
-| `rate-limit` | 429 after the built-in retries | Wait a few minutes, smaller batch |
-| `unavailable` | Private, removed, or region-locked | Nothing to fetch |
+| `rate-limit` | HTTP 429 after the built-in retries | Wait a few minutes, smaller batch |
+| `tls` | TLS certificate verification failed (stale CA bundle, or a proxy that re-signs TLS) | `python3 -m pip install -U certifi`; see [TLS certificates](#tls-certificates) |
+| `unavailable` | Private, removed, age-restricted, or region-locked | Nothing to fetch |
 
-The first three affect every video in a batch, so ytscribe stops at that point instead of sending YouTube more requests that cannot succeed, lists the unattempted videos under `failed`, and sets `aborted` in the results. It also warns at startup when yt-dlp is more than 45 days old, and runs the yt-dlp installed for the current interpreter (`python -m yt_dlp`) rather than whatever `yt-dlp` happens to be first on PATH.
+The first four affect every video in a batch, so ytscribe stops at that point instead of sending YouTube more requests that cannot succeed, lists the unattempted videos under `failed`, and sets `aborted` in the results. It also warns at startup when yt-dlp is more than 45 days old, and runs the yt-dlp installed for the current interpreter (`python -m yt_dlp`) rather than whatever `yt-dlp` happens to be first on PATH.
+
+The kind is read from the first `ERROR:` line yt-dlp prints and nothing else, so a video id or temp path that happens to contain "429" is not mistaken for a rate limit. Age-gated videos ("Sign in to confirm your age") are `unavailable`, not `bot-check`: they never succeed without a signed-in session, so they are not retried as if the IP were blocked.
+
+### TLS certificates
+
+ytscribe verifies TLS certificates. Everything it ingests, from the metadata JSON to the caption text, arrives over that connection and gets stored and published downstream, so an unverified connection would let anyone on the network path write the transcript.
+
+Some sandboxes route traffic through a proxy that re-signs TLS with a CA yt-dlp does not trust, and every video then fails with `tls`. Fix the trust first: refresh the bundle (`python3 -m pip install -U certifi`) or add the proxy's CA to the bundle yt-dlp uses (certifi's when installed, otherwise the system store). Only as a last resort, set `YTSCRIBE_INSECURE_TLS=1` (`true`, `yes` and `on` also work) to pass yt-dlp's `--no-check-certificates`. ytscribe prints a warning to stderr once per run while it is in effect. Do not set it in a pipeline that publishes what it collects.
 
 ---
 
